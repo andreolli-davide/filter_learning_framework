@@ -1,5 +1,6 @@
 from abc import ABC, ABCMeta, abstractmethod
 from enum import IntEnum, auto
+from inspect import Parameter
 from typing import Generic, TypeVar
 
 import numpy as np
@@ -19,9 +20,16 @@ class FilterType(IntEnum):
 
 class FilterAdapterMeta(ABCMeta):
     """
-    Metaclass that enforces:
-    1. A 'name' string attribute.
-    2. An 'initial_hyperparameters' attribute matching the Generic TypeVar.
+    Metaclass that enforces required class attributes for FilterAdapter subclasses.
+
+    All concrete FilterAdapter subclasses must define:
+    1. 'name' (str): A unique identifier for the filter.
+    2. 'filter_type' (FilterType): The category/type of the filter.
+    3. 'initial_hyperparameters' (FilterHyperparameters): Default parameter values.
+    4. 'parameters_class' (Type[FilterHyperparameters]): The class defining filter parameters.
+
+    This metaclass validates these attributes at class definition time, ensuring
+    consistent interface across all filter implementations.
     """
 
     def __new__(mcls, name, bases, dct):
@@ -39,6 +47,9 @@ class FilterAdapterMeta(ABCMeta):
 
         if "initial_hyperparameters" not in dct:
             raise TypeError(f"Class '{name}' must define 'initial_hyperparameters'.")
+
+        if "parameters_class" not in dct:
+            raise TypeError(f"Class '{name}' must define 'parameters_class'.")
 
         return super().__new__(mcls, name, bases, dct)
 
@@ -71,6 +82,7 @@ class NoOpFilterAdapter(FilterAdapter[NoOpFilterParameters]):
 
     name = "NoOpFilter"
     filter_type = FilterType.NO_OP
+    parameters_class = NoOpFilterParameters
     initial_hyperparameters = NoOpFilterParameters()
 
     @classmethod
@@ -95,6 +107,7 @@ class MedianBlurFilterAdapter(FilterAdapter[MedianBlurParameters]):
 
     name = "MedianBlur"
     filter_type = FilterType.NOISE_REDUCTION
+    parameter_class = MedianBlurParameters
     initial_hyperparameters = MedianBlurParameters(kernel_size=3)
 
     @classmethod
@@ -104,4 +117,3 @@ class MedianBlurFilterAdapter(FilterAdapter[MedianBlurParameters]):
         import cv2
 
         return cv2.medianBlur(image, parameters.kernel_size)
-
