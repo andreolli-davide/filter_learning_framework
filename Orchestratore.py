@@ -29,8 +29,8 @@ best_config = {
     "valore": float("-inf")
 }
 
-PATH_IMAGE_DATASET = "Dataset/target/images/val"
-PATH_LABEL_DATASET = "Dataset/target/labels/val"
+PATH_IMAGE_DATASET = "Dataset/target/images/train"
+PATH_LABEL_DATASET = "Dataset/target/labels/train"
 
 dataset = load_dataset(PATH_IMAGE_DATASET, PATH_LABEL_DATASET)
 model = load_model("best.pt")
