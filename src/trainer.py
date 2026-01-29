@@ -126,6 +126,7 @@ if __name__ == "__main__":
         study_name="yolo_preprocessing_optimization",
         storage="sqlite:///yolo_preprocessing_optimization.db",
         load_if_exists=True,
+        direction="maximize",
     )
     # Instantiate the Trainer with a sequence of filter adapters and a random dataset
     trainer = Trainer(
