@@ -1,16 +1,26 @@
-import random
+import optuna
+from filters import (
+    NoOpFilterAdapter,
+    MedianBlurFilterAdapter,
+    BilateralFilterAdapter,
+    SaturationBoostFilterAdapter,
+    SoftClaheFilterAdapter,
+    HardClaheFilterAdapter,
+    GammaCorrectionFilterAdapter,
+    UnsharpMaskFilterAdapter,
+    LaplacianSharpenFilterAdapter,
+)
 
-def simula_performance_combinata(operazioni_applicate):
-    """
-    Simula la performance di una combinazione di operazioni
-    """
-    return random.uniform(0, 1)
+import trainer
+from utils import load_model, load_dataset
+from trainer import Trainer
 
 # Definizione dei livelli di operazioni
 livelli_operazioni = [
-    ['no denoise', 'median blur', 'bilateral filter'],  # Livello 1
-    ['no contrast', 'CLAHE soft', 'CLAHE hard', 'Gamma correction'],  # Livello 2
-    ['No sharpen', 'Unsharp mask', 'kernel Sharpen']  # Livello 3
+    [NoOpFilterAdapter, MedianBlurFilterAdapter, BilateralFilterAdapter],  # Livello 1
+    [NoOpFilterAdapter, SaturationBoostFilterAdapter],  # Livello 2
+    [NoOpFilterAdapter, SoftClaheFilterAdapter, HardClaheFilterAdapter, GammaCorrectionFilterAdapter],  # Livello 3
+    [NoOpFilterAdapter, UnsharpMaskFilterAdapter, LaplacianSharpenFilterAdapter ] # Livello 4
 ]
 
 # Configurazione migliore iniziale
@@ -19,6 +29,19 @@ best_config = {
     "valore": float("-inf")
 }
 
+PATH_IMAGE_DATASET = "Dataset/target/images/val"
+PATH_LABEL_DATASET = "Dataset/target/labels/val"
+
+dataset = load_dataset(PATH_IMAGE_DATASET, PATH_LABEL_DATASET)
+model = load_model("best.pt")
+
+# Create or load an Optuna study for YOLO preprocessing optimization
+study = optuna.create_study(
+        study_name="yolo_preprocessing_optimization_TEST",
+        storage="sqlite:///yolo_preprocessing_optimization.db",
+        load_if_exists=True,
+        direction="maximize",
+    )
 
 for idx, livello in enumerate(livelli_operazioni, 1):
     print(f"--- Livello {idx} ---")
@@ -36,15 +59,24 @@ for idx, livello in enumerate(livelli_operazioni, 1):
         combinazione = best_config["operazioni"].copy()
         combinazione.append(operazione)
         
-        # Simula la performance di questa combinazione
-        valore_combinazione = simula_performance_combinata(combinazione)
+        # Instantiate the Trainer with a sequence of filter adapters and a random dataset
+        Trainer_instance = Trainer(
+            filters_path=combinazione,
+            dataset=dataset, 
+            model=model
+        )
         
-        print(f"  {combinazione}: {valore_combinazione:.4f}")
+
+        # Run the optimization for 100 trials
+        study.optimize(Trainer_instance.objective, n_trials=100)
+
+        best_result = study.best_value
+        best_params = study.best_params
         
         # Aggiorna se è la migliore per questo livello
-        if valore_combinazione > best_level["valore"]:
+        if best_result > best_level["valore"]:
             best_level["operazioni"] = combinazione
-            best_level["valore"] = valore_combinazione
+            best_level["valore"] = best_result
     
     # Aggiorna la configurazione globale con la migliore di questo livello
     best_config = best_level

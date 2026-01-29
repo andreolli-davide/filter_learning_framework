@@ -8,3 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+/Dataset
+/Vecchi file
+/venv
+best.pt
+yolo_preprocessing_optimization.db
