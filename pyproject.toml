@@ -6,9 +6,11 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "jupyter>=1.1.1",
+    "kagglehub>=0.4.2",
     "numpy>=2.4.1",
     "opencv-python>=4.13.0.90",
     "optuna>=4.7.0",
     "optuna-dashboard>=0.20.0",
     "pydantic>=2.12.5",
+    "tqdm>=4.67.1",
 ]
