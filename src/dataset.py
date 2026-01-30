@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class Label(BaseModel):
@@ -52,9 +52,7 @@ class Sample(BaseModel):
     magnitude: SampleMagnitude = Field(
         ..., description="Sample magnitude (HCM or LCM)."
     )
-    _numpy_image: Optional[np.ndarray] = Field(
-        default=None, repr=False, description="Cached numpy image array."
-    )
+    _numpy_image: Optional[np.ndarray] = PrivateAttr(default=None)
 
     def load_image(self) -> np.ndarray:
         """
@@ -109,6 +107,7 @@ class Dataset:
         )
 
         self.base_path = Path(download_path)
+        self._load_samples()
 
     def load_from_path(self, path: Path):
         """
@@ -125,6 +124,7 @@ class Dataset:
             raise Exception("Given path is not a directory.")
 
         self.base_path = path
+        self._load_samples()
 
     def _load_samples(self):
         """
