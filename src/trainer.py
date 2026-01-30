@@ -30,6 +30,7 @@ from filters import (
     IsFilterAdapter,
     LaplacianSharpenFilterAdapter,
     MedianBlurFilterAdapter,
+    NoOpFilterAdapter,
     SaturationBoostFilterAdapter,
     SoftClaheFilterAdapter,
 )
@@ -72,6 +73,10 @@ class Trainer:
                 raise ValueError(
                     f"Violation of ordering constraint at layer {i}: found '{filter_class.filter_type.name}'."
                 )
+
+        # Ensure not all filters are NO_OP
+        if all([filter == NoOpFilterAdapter for filter in filters_path]):
+            raise ValueError("The filter path cannot consist solely of NO_OP filters.")
 
         self.filters_path = filters_path
         self.samples = samples
