@@ -18,15 +18,29 @@ def execute_experiment(dataset: list, model) -> float:
 
     with tempfile.TemporaryDirectory() as tmp:
         images_dir = os.path.join(tmp, "images")
-        os.makedirs(images_dir, exist_ok=True)
+        labels_dir = os.path.join(tmp, "labels")
 
-        # salva immagini temporanee
+        os.makedirs(images_dir, exist_ok=True)
+        os.makedirs(labels_dir, exist_ok=True)
+
+        # salva immagini + label temporanee
         for sample in dataset:
             image = sample["image"]
             img_name = sample["image_name"]
+            labels = sample["labels"]
 
-            tmp_img_path = os.path.join(images_dir, img_name)
-            cv2.imwrite(tmp_img_path, image)
+            # ---------- immagine ----------
+            img_path = os.path.join(images_dir, img_name)
+            cv2.imwrite(img_path, image)
+
+            # ---------- label ----------
+            label_name = os.path.splitext(img_name)[0] + ".txt"
+            label_path = os.path.join(labels_dir, label_name)
+
+            with open(label_path, "w") as f:
+                for lab in labels:
+                    # lab = [class, x, y, w, h] (YOLO format)
+                    f.write(" ".join(map(str, lab)) + "\n")
 
         # crea yaml
         yaml_path = create_yaml_config(tmp)
@@ -34,7 +48,7 @@ def execute_experiment(dataset: list, model) -> float:
         # valida
         results = model.val(
             data=yaml_path,
-            split='test',
+            split="test",
             save_json=False,
             save_hybrid=False,
             plots=False,
@@ -75,24 +89,37 @@ def load_model(path_model: str):
     model = YOLO(path_model)
     return model
 
-def load_dataset(image_path: str, path_labels: str) -> list:
+def load_dataset(image_path: str, label_path: str) -> list:
     import cv2
     dataset = []
-
-    image_files = os.listdir(image_path)
-
+    image_files = sorted([f for f in os.listdir(image_path) 
+                         if f.endswith(('.jpg', '.png', '.jpeg'))])
+    
+    total_labels = 0
+    
     for img_name in image_files:
         img_full_path = os.path.join(image_path, img_name)
+        label_name = os.path.splitext(img_name)[0] + ".txt"
+        label_full_path = os.path.join(label_path, label_name)
 
-        # carica immagine
+        # Carica immagine
         img = cv2.imread(img_full_path)
         if img is None:
             continue
 
+        # Carica labels
+        labels = []
+        if os.path.exists(label_full_path):
+            with open(label_full_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        labels.append(list(map(float, line.split())))
+        
+        total_labels += len(labels)
+
         dataset.append({
             "image_name": img_name,
-            "image": img,
-            "path_labels": path_labels
+            "image": img,  
+            "labels": labels
         })
-
-    return dataset
