@@ -71,6 +71,8 @@ def create_yaml_config(tmp_dir: str):
 
     config = {
         "path": tmp_dir,
+        "train": "images",
+        "val": "images",
         "test": "images",
         "nc": len(CLASS_NAMES),
         "names": CLASS_NAMES
@@ -89,37 +91,37 @@ def load_model(path_model: str):
     model = YOLO(path_model)
     return model
 
+
 def load_dataset(image_path: str, label_path: str) -> list:
     import cv2
     dataset = []
-    image_files = sorted([f for f in os.listdir(image_path) 
-                         if f.endswith(('.jpg', '.png', '.jpeg'))])
-    
-    total_labels = 0
-    
+
+    image_files = os.listdir(image_path)
+
     for img_name in image_files:
         img_full_path = os.path.join(image_path, img_name)
         label_name = os.path.splitext(img_name)[0] + ".txt"
         label_full_path = os.path.join(label_path, label_name)
 
-        # Carica immagine
+        # carica immagine
         img = cv2.imread(img_full_path)
         if img is None:
             continue
 
-        # Carica labels
+        # carica label YOLO
         labels = []
         if os.path.exists(label_full_path):
             with open(label_full_path, "r") as f:
                 for line in f:
-                    line = line.strip()
-                    if line:
-                        labels.append(list(map(float, line.split())))
-        
-        total_labels += len(labels)
+                    labels.append(
+                        list(map(float, line.strip().split()))
+                    )
+        # ogni riga: [class, x, y, w, h]
 
         dataset.append({
             "image_name": img_name,
-            "image": img,  
+            "image": img,
             "labels": labels
         })
+
+    return dataset
