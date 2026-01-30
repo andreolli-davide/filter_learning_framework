@@ -126,7 +126,6 @@ class Trainer:
             preprocessed_dataset.append(preprocessed_sample)
 
 
-        # Simulate YOLO inference latency and accuracy evaluation
         result = execute_experiment(
             dataset=preprocessed_dataset,
             model=self.model,

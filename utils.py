@@ -10,57 +10,64 @@ def yolo_to_xyxy(label, img_w, img_h):
     y2 = (y + h / 2) * img_h
     return int(cls), [x1, y1, x2, y2]
 
-def execute_experiment(dataset: list, model, ) -> float:
-    from torchmetrics.detection.mean_ap import MeanAveragePrecision
-    import torch
 
-    metric = MeanAveragePrecision(iou_thresholds=[0.5]) # Imposta mAP@0.5
+def execute_experiment(dataset: list, model) -> float:
+    import tempfile
+    import cv2
+    import os
 
-    for sample in tqdm(dataset, desc="Inferenza", unit="img"):
-        image = sample["image"]
-        labels = sample["labels"]
+    with tempfile.TemporaryDirectory() as tmp:
+        images_dir = os.path.join(tmp, "images")
+        os.makedirs(images_dir, exist_ok=True)
 
-        h, w, _ = image.shape
+        # salva immagini temporanee
+        for sample in dataset:
+            image = sample["image"]
+            img_name = sample["image_name"]
 
-        # ---------- GT ----------
-        gt_boxes = []
-        gt_labels = []
+            tmp_img_path = os.path.join(images_dir, img_name)
+            cv2.imwrite(tmp_img_path, image)
 
-        for lab in labels:
-            cls, box = yolo_to_xyxy(lab, w, h)
-            gt_boxes.append(box)
-            gt_labels.append(cls)
+        # crea yaml
+        yaml_path = create_yaml_config(tmp)
 
-        target = {
-            "boxes": torch.tensor(gt_boxes, dtype=torch.float32),
-            "labels": torch.tensor(gt_labels, dtype=torch.int64)
-        }
+        # valida
+        results = model.val(
+            data=yaml_path,
+            split='test',
+            save_json=False,
+            save_hybrid=False,
+            plots=False,
+            verbose=False
+        )
 
-        # ---------- PRED ----------
-        results = model(image, conf=0.001, verbose=False)
-
-        r = results[0]
-
-        if r.boxes is None or len(r.boxes) == 0:
-            preds = {
-                "boxes": torch.zeros((0, 4)),
-                "scores": torch.zeros((0,)),
-                "labels": torch.zeros((0,), dtype=torch.int64)
-            }
-        else:
-            preds = {
-                "boxes": r.boxes.xyxy.cpu(),
-                "scores": r.boxes.conf.cpu(),
-                "labels": r.boxes.cls.cpu().long()
-            }
-
-        metric.update([preds], [target])
-
-    result = metric.compute()
-
-    return result["map_50"]
+        return results.box.map50
 
 
+def create_yaml_config(tmp_dir: str):
+    import yaml
+    import os
+
+    CLASS_NAMES = [
+        "schizont",
+        "gametocyte",
+        "ring",
+        "trophozoite"
+    ]
+
+    config = {
+        "path": tmp_dir,
+        "test": "images",
+        "nc": len(CLASS_NAMES),
+        "names": CLASS_NAMES
+    }
+
+    yaml_path = os.path.join(tmp_dir, "config.yaml")
+
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f)
+
+    return yaml_path
 
 
 def load_model(path_model: str):
@@ -68,7 +75,7 @@ def load_model(path_model: str):
     model = YOLO(path_model)
     return model
 
-def load_dataset(image_path: str, label_path: str) -> list:
+def load_dataset(image_path: str, path_labels: str) -> list:
     import cv2
     dataset = []
 
@@ -76,28 +83,16 @@ def load_dataset(image_path: str, label_path: str) -> list:
 
     for img_name in image_files:
         img_full_path = os.path.join(image_path, img_name)
-        label_name = os.path.splitext(img_name)[0] + ".txt"
-        label_full_path = os.path.join(label_path, label_name)
 
         # carica immagine
         img = cv2.imread(img_full_path)
         if img is None:
             continue
 
-        # carica label YOLO
-        labels = []
-        if os.path.exists(label_full_path):
-            with open(label_full_path, "r") as f:
-                for line in f:
-                    labels.append(
-                        list(map(float, line.strip().split()))
-                    )
-        # ogni riga: [class, x, y, w, h]
-
         dataset.append({
             "image_name": img_name,
             "image": img,
-            "labels": labels
+            "path_labels": path_labels
         })
 
     return dataset
