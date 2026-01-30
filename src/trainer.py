@@ -1,11 +1,29 @@
+"""
+trainer.py
+This module provides a Trainer class for optimizing sequences of image preprocessing filters
+using Optuna for hyperparameter search. It leverages Pydantic for parameter validation and
+type safety, and supports flexible filter pipelines. The Trainer applies a series of filters
+to image samples, simulates evaluation (e.g., YOLO accuracy), and integrates with Optuna to
+find optimal hyperparameters.
+
+Main Components:
+- Trainer: Manages filter pipelines, sample processing, and optimization tasks.
+- Task: Represents a single optimization iteration and its parameters.
+
+Each class and method is documented, and all Pydantic fields include descriptions for clarity.
+"""
+
 import time
+from pathlib import Path
 from typing import List, Type
-from optuna import Trial
 
 import numpy as np
 import optuna
-from pydantic import BaseModel
+from optuna import Trial
+from pydantic import BaseModel, Field
+from tqdm import tqdm
 
+from dataset import Dataset, Sample
 from filters import (
     FilterHyperparametersHint,
     FilterType,
@@ -24,25 +42,27 @@ class Trainer:
     """
 
     filters_path: List[Type[IsFilterAdapter]]
-    dataset: List[np.ndarray]
+    samples: List[Sample]
 
     class Task(BaseModel):
         """
         Represents a single optimization task, storing the iteration and parameters.
         """
 
-        iteration: int
-        parameters: List[BaseModel]
+        iteration: int = Field(..., description="Iteration number of the task.")
+        parameters: List[BaseModel] = Field(
+            ..., description="List of hyperparameter sets."
+        )
 
     def __init__(
-        self, filters_path: List[Type[IsFilterAdapter]], dataset: List[np.ndarray]
+        self, filters_path: List[Type[IsFilterAdapter]], samples: List[Sample]
     ) -> None:
         """
         Initialize the Trainer.
 
         Args:
             filters_path: List of filter adapter classes in the order to be applied.
-            dataset: List of images (as numpy arrays) to process.
+            dataset: List of samples to process.
         """
         # Ensure filters are ordered correctly and no NO_OP filters are in the path
         for i, filter_class in enumerate(filters_path):
@@ -52,8 +72,9 @@ class Trainer:
                 raise ValueError(
                     f"Violation of ordering constraint at layer {i}: found '{filter_class.filter_type.name}'."
                 )
+
         self.filters_path = filters_path
-        self.dataset = dataset
+        self.samples = samples
 
     def objective(self, trial: Trial) -> float:
         """
@@ -107,7 +128,8 @@ class Trainer:
             )
 
         # Apply the filter pipeline to each image in the dataset
-        for image in self.dataset:
+        for sample in tqdm(self.samples, desc="Applying filters", unit="img"):
+            image = sample.load_image()
             preprocessing_result = image.copy()
             for layer_index, filter_class in enumerate(self.filters_path):
                 preprocessing_result = filter_class.apply_filter(
@@ -128,6 +150,11 @@ if __name__ == "__main__":
         load_if_exists=True,
         direction="maximize",
     )
+
+    dataset = Dataset()
+    dataset.load_from_path(Path("resources/dataset"))
+    samples = dataset.pick_random_samples(20)
+
     # Instantiate the Trainer with a sequence of filter adapters and a random dataset
     trainer = Trainer(
         filters_path=[
@@ -136,9 +163,7 @@ if __name__ == "__main__":
             SoftClaheFilterAdapter,
             LaplacianSharpenFilterAdapter,
         ],
-        dataset=[
-            np.random.randint(0, 256, (224, 224, 3), dtype=np.uint8) for _ in range(256)
-        ],
+        samples=samples,
     )
 
     # Run the optimization for 100 trials
