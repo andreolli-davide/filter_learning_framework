@@ -42,6 +42,21 @@ class MalariaStage(IntEnum):
     TROPHOZOITE = auto()
 
 
+class DatasetSplit(StrEnum):
+    """
+    Enum for dataset splits.
+
+    Values:
+        TRAIN (str): Training split.
+        TEST (str): Test split.
+        VAL (str): Validation split.
+    """
+
+    TRAIN = "train"
+    TEST = "test"
+    VAL = "val"
+
+
 class Label(BaseModel):
     """
     Represents a label for an image, containing the coordinates for the four corners and the malaria stage.
@@ -115,6 +130,7 @@ class Sample(BaseModel):
         labels_path (Optional[Path]): Path to the labels file.
         labels (List[Label]): List of labels for the image.
         magnitude (SampleMagnitude): Sample magnitude (HCM or LCM).
+        split (Optional[DatasetSplit]): Dataset split (train, test, val).
     """
 
     image_path: Path = Field(..., description="Path to the image file.")
@@ -124,6 +140,9 @@ class Sample(BaseModel):
     labels: List[Label] = Field(description="List of labels for the image.")
     magnitude: SampleMagnitude = Field(
         ..., description="Sample magnitude (HCM or LCM)."
+    )
+    split: Optional[DatasetSplit] = Field(
+        ..., description="Dataset split (train, test, val)."
     )
     _numpy_image: Optional[np.ndarray] = PrivateAttr(default=None)
 
@@ -178,7 +197,7 @@ class Dataset(ABC):
         import kagglehub
 
         download_path = kagglehub.dataset_download(
-            "shahidzikria/malariahcm1000",
+            "davidesenette/malariahcm-lcm-1000",
             path=destination_path.as_posix() if destination_path else None,
         )
 
@@ -246,6 +265,7 @@ class Dataset(ABC):
                     labels_path=temporary_labels_path,
                     labels=sample.labels,
                     magnitude=sample.magnitude,
+                    split=sample.split,
                 )
             )
 
@@ -264,12 +284,16 @@ class Dataset(ABC):
         for sample in tqdm(self.samples, desc="Unloading images", unit="img"):
             sample.unload_image()
 
-    def pick_random_samples(self, k: int) -> List[Sample]:
+    def pick_random_samples(
+        self,
+        k: Optional[int] = None,
+        magnitude: Optional[SampleMagnitude] = None,
+        split: Optional[DatasetSplit] = None,
+    ) -> List[Sample]:
         """
         Picks k random samples from the dataset.
         Args:
             k (int): Number of samples to pick.
-            type (Literal["hcm", "lcm"]): Type of samples to pick (currently unused).
         Returns:
             List[Sample]: List of randomly picked samples.
         Raises:
@@ -280,9 +304,29 @@ class Dataset(ABC):
                 "Use 'load_from_kaggle' or 'load_from_path' before trying to pick a sample."
             )
 
+        if k is None and magnitude is None and split is None:
+            raise Exception("At least one filtering parameter must be provided.")
+
         import random
 
-        return random.choices(self.samples, k=k)
+        samples = self.samples
+
+        if magnitude is not None:
+            samples = [sample for sample in samples if sample.magnitude == magnitude]
+
+        if split is not None:
+            samples = [
+                sample
+                for sample in samples
+                if sample.split is not None and sample.split == split
+            ]
+
+        if k is not None:
+            if k > len(samples):
+                raise Exception("Requested more samples than available in the dataset.")
+            samples = random.sample(samples, k)
+
+        return samples
 
 
 class FileSystemDataset(Dataset):
@@ -332,6 +376,8 @@ class FileSystemDataset(Dataset):
                 case _:
                     raise Exception("Dataset seems to be corrupted.")
 
+            split = DatasetSplit(image_path.parts[2])
+
             labels_path = (
                 self.base_path
                 / image_path.parts[0]
@@ -352,6 +398,7 @@ class FileSystemDataset(Dataset):
                     labels_path=labels_path,
                     labels=labels,
                     magnitude=magnitude,
+                    split=split,
                 )
             )
 
@@ -403,9 +450,3 @@ class TemporaryDataset(Dataset):
         """
         if self.temporary_directory is not None:
             self.temporary_directory.cleanup()
-
-
-if __name__ == "__main__":
-    dataset = Dataset.load_from_path(Path("resources/dataset"))
-    batch = dataset.pick_random_samples(20)
-    temporary_dataset = TemporaryDataset.create_temporary(batch)
