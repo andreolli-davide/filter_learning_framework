@@ -16,29 +16,90 @@ Each class exposes its fields with descriptions, and methods are documented for 
 
 import tempfile
 from abc import ABC
-from enum import StrEnum
+from enum import IntEnum, StrEnum, auto
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Self
 from warnings import deprecated
 
 import numpy as np
 from pydantic import BaseModel, Field, PrivateAttr
 
 
-class Label(BaseModel):
+class MalariaStage(IntEnum):
     """
-    Represents a label for an image, containing the coordinates for the four corners.
+    Enumeration of malaria stages for labeling images.
+
+    Values:
+        SCHIZONT (int): Schizont stage.
+        GAMETOCYTE (int): Gametocyte stage.
+        RING (int): Ring stage.
+        TROPHOZOITE (int): Trophozoite stage.
     """
 
+    SCHIZONT = 0
+    GAMETOCYTE = auto()
+    RING = auto()
+    TROPHOZOITE = auto()
+
+
+class Label(BaseModel):
+    """
+    Represents a label for an image, containing the coordinates for the four corners and the malaria stage.
+
+    Attributes:
+        malaria_stage (MalariaStage): Malaria stage associated with the label.
+        top_left (float): Top-left coordinate value.
+        top_right (float): Top-right coordinate value.
+        bottom_left (float): Bottom-left coordinate value.
+        bottom_right (float): Bottom-right coordinate value.
+    """
+
+    malaria_stage: MalariaStage = Field(
+        ..., description="Malaria stage associated with the label."
+    )
     top_left: float = Field(..., description="Top-left coordinate value.")
     top_right: float = Field(..., description="Top-right coordinate value.")
     bottom_left: float = Field(..., description="Bottom-left coordinate value.")
     bottom_right: float = Field(..., description="Bottom-right coordinate value.")
 
+    @classmethod
+    def from_yolo_format(cls, yolo_string: str) -> Self:
+        """
+        Creates a Label instance from a YOLO format string.
+        Args:
+            yolo_string (str): YOLO formatted string for the label.
+        Returns:
+            Label: The created Label instance.
+        """
+
+        format_parts = yolo_string.strip().split()
+        if len(format_parts) != 5:
+            raise Exception("Invalid YOLO format string.")
+
+        return cls(
+            malaria_stage=MalariaStage(int(format_parts[0])),
+            top_left=float(format_parts[1]),
+            top_right=float(format_parts[2]),
+            bottom_left=float(format_parts[3]),
+            bottom_right=float(format_parts[4]),
+        )
+
+    def to_yolo_format(self) -> str:
+        """
+        Converts the label to YOLO format string.
+        Returns:
+            str: YOLO formatted string for the label.
+        """
+        return f"{self.malaria_stage.value} {self.top_left} {self.top_right} {self.bottom_left} {self.bottom_right}"
+
 
 class SampleMagnitude(StrEnum):
     """
     Enum for sample magnitudes.
+
+    Attributes:
+        HCM (str): High-content magnitude.
+        LCM (str): Low-content magnitude.
     """
 
     HCM = "hcm"
@@ -48,6 +109,12 @@ class SampleMagnitude(StrEnum):
 class Sample(BaseModel):
     """
     Represents a single dataset sample, including image path, labels, and magnitude.
+
+    Attributes:
+        image_path (Path): Path to the image file.
+        labels_path (Optional[Path]): Path to the labels file.
+        labels (List[Label]): List of labels for the image.
+        magnitude (SampleMagnitude): Sample magnitude (HCM or LCM).
     """
 
     image_path: Path = Field(..., description="Path to the image file.")
@@ -63,8 +130,10 @@ class Sample(BaseModel):
     def load_image(self) -> np.ndarray:
         """
         Loads the image from disk as a numpy array and caches it.
+
         Returns:
             np.ndarray: The loaded image.
+
         Raises:
             Exception: If the image cannot be loaded.
         """
@@ -88,6 +157,10 @@ class Sample(BaseModel):
 class Dataset(ABC):
     """
     Represents a dataset containing multiple samples.
+
+    Attributes:
+        base_path (Optional[Path]): Base directory of the dataset.
+        samples (List[Sample]): List of loaded samples.
     """
 
     base_path: Optional[Path] = None  # Base directory of the dataset
@@ -178,6 +251,7 @@ class Dataset(ABC):
 
         instance = object.__new__(TemporaryDataset)
         instance.base_path = temporary_directory_path
+        instance.temporary_directory = temporary_directory
         instance.samples = temporary_samples
         return instance
 
@@ -214,6 +288,7 @@ class Dataset(ABC):
 class FileSystemDataset(Dataset):
     """
     Dataset implementation for datasets stored on the filesystem.
+
     Provides methods for loading, copying, and cleaning up datasets.
     """
 
@@ -221,7 +296,9 @@ class FileSystemDataset(Dataset):
         "Use 'Template.load_from_kaggle' or 'Template.load_from_path' to instantiate FileSystemDataset."
     )
     def __init__(self, *args, **kwargs):
-        # Prevent direct instantiation; use class methods instead.
+        """
+        Prevent direct instantiation; use class methods instead.
+        """
         raise RuntimeError(
             "Use 'Template.load_from_kaggle' or 'Template.load_from_path' to instantiate FileSystemDataset."
         )
@@ -266,18 +343,8 @@ class FileSystemDataset(Dataset):
             labels_raw = labels_path.read_text()
             labels: List[Label] = []
 
-            for label_raw in labels_raw.split("\n"):
-                label_raw_parts = label_raw.split(" ")
-                if len(label_raw_parts) != 5:
-                    continue
-                labels.append(
-                    Label(
-                        top_left=float(label_raw_parts[1]),
-                        top_right=float(label_raw_parts[2]),
-                        bottom_left=float(label_raw_parts[3]),
-                        bottom_right=float(label_raw_parts[4]),
-                    )
-                )
+            for label_raw in labels_raw.splitlines():
+                labels.append(Label.from_yolo_format(label_raw))
 
             self.samples.append(
                 Sample(
@@ -315,10 +382,10 @@ class TemporaryDataset(Dataset):
     Dataset implementation for temporary datasets stored in a temporary directory.
 
     Attributes:
-        temporary_directory (Optional[tempfile.TemporaryDirectory]): Reference to the temporary directory for cleanup.
+        temporary_directory (tempfile.TemporaryDirectory): Reference to the temporary directory for cleanup.
     """
 
-    temporary_directory: Optional[tempfile.TemporaryDirectory] = None
+    temporary_directory: tempfile.TemporaryDirectory
 
     @deprecated("Use 'Template.create_temporary' to instantiate FileSystemDataset.")
     def __init__(self, *_, **__):
