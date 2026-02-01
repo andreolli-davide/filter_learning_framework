@@ -9,9 +9,11 @@ from dataset import (
     Dataset,
     DatasetSplit,
     MalariaStage,
-    SampleMagnitude,
-    TemporaryDataset,
+    Magnitude,
+    StagingDataset,
+    TransientSample,
 )
+from filters import SoftClaheFilterAdapter
 
 
 class YoloConfig(BaseModel):
@@ -86,7 +88,7 @@ class Yolo:
 
         return instance
 
-    def evaluate(self, dataset: TemporaryDataset) -> float:
+    def evaluate(self, dataset: StagingDataset) -> float:
         """
         Evaluates the YOLO model on a temporary dataset.
 
@@ -116,19 +118,24 @@ class Yolo:
 
 
 if __name__ == "__main__":
-    dataset = Dataset.load_from_path(Path("resources/dataset"))
+    dataset = Dataset.load_from_directory(Path("resources/dataset"))
     model = Yolo.load_model(Path("resources/model.pt"))
 
     samples = dataset.pick_random_samples(
-        magnitude=SampleMagnitude.LCM, split=DatasetSplit.VAL
+        magnitude=Magnitude.LCM, split=DatasetSplit.VAL
     )
-    temporary_dataset = TemporaryDataset.create_temporary(samples)
-    model.evaluate(temporary_dataset)
+    transformed_samples: List[TransientSample] = []
+    for sample in samples:
+        transformed_sample = sample.apply_transform(
+            [
+                SoftClaheFilterAdapter.parametrized(
+                    SoftClaheFilterAdapter.initial_parameters
+                )
+            ]
+        )
+        transformed_samples.append(transformed_sample)
 
-    del temporary_dataset
+    transient_dataset = Dataset.create_transient_dataset(transformed_samples)
 
-    samples = dataset.pick_random_samples(
-        magnitude=SampleMagnitude.HCM, split=DatasetSplit.VAL
-    )
-    temporary_dataset = TemporaryDataset.create_temporary(samples)
-    model.evaluate(temporary_dataset)
+    temporary_dataset = transient_dataset.to_staging_dataset()
+    result = model.evaluate(temporary_dataset)

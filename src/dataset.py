@@ -374,7 +374,7 @@ class Dataset(ABC, Generic[SampleT]):
         return instance
 
     @staticmethod
-    def create_staging(samples: List[StoredSample]) -> "StagingDataset":
+    def create_staging_dataset(samples: List[StoredSample]) -> "StagingDataset":
         """
         Creates a staging dataset from a list of StoredSample instances by copying their files to a temporary directory.
 
@@ -487,7 +487,7 @@ class Dataset(ABC, Generic[SampleT]):
 
         import random
 
-        filtered_samples = self.samples
+        filtered_samples = self.samples.copy()
 
         if magnitude is not None:
             filtered_samples = [
@@ -625,9 +625,9 @@ class StagingDataset(StoredDataset):
         temporary_directory (tempfile.TemporaryDirectory): Reference to the temporary directory for cleanup.
     """
 
-    temporary_directory: tempfile.TemporaryDirectory = PrivateAttr()
+    temporary_directory: tempfile.TemporaryDirectory
 
-    @deprecated("Use 'Dataset.create_staging' to instantiate StagingDataset.")
+    @deprecated("Use 'Dataset.create_staging_dataset' to instantiate StagingDataset.")
     def __init__(self):
         """
         Prevents direct instantiation of StagingDataset.
@@ -636,7 +636,7 @@ class StagingDataset(StoredDataset):
             RuntimeError: Always raised to prevent direct instantiation.
         """
         raise RuntimeError(
-            "Use 'Dataset.create_staging' to instantiate StagingDataset."
+            "Use 'Dataset.create_staging_dataset' to instantiate StagingDataset."
         )
 
     def __del__(self):
@@ -672,7 +672,7 @@ class TransientDataset(Dataset[TransientSample]):
             "Use 'Dataset.create_transient_dataset' to instantiate TransientDataset."
         )
 
-    def to_staging(self) -> StagingDataset:
+    def to_staging_dataset(self) -> StagingDataset:
         """
         Converts the transient dataset to a staging dataset by writing samples to a temporary directory.
 
@@ -811,7 +811,7 @@ if __name__ == "__main__":
         transformed_sample = sample.apply_transform(
             [
                 SoftClaheFilterAdapter.parametrized(
-                    SoftClaheFilterAdapter.initial_hyperparameters
+                    SoftClaheFilterAdapter.initial_parameters
                 )
             ]
         )

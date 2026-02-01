@@ -13,19 +13,23 @@ Main Components:
 Each class and method is documented, and all Pydantic fields include descriptions for clarity.
 """
 
-import time
 from pathlib import Path
 from typing import List, Type
 
-import numpy as np
 import optuna
 from optuna import Trial
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from tqdm import tqdm
 
-from dataset import Dataset, Sample
+from dataset import (
+    Dataset,
+    DatasetSplit,
+    Magnitude,
+    StoredSample,
+    TransientSample,
+)
 from filters import (
-    FilterHyperparametersHint,
+    FilterParametersHint,
     FilterType,
     IsFilterAdapter,
     LaplacianSharpenFilterAdapter,
@@ -34,6 +38,7 @@ from filters import (
     SaturationBoostFilterAdapter,
     SoftClaheFilterAdapter,
 )
+from yolo import Yolo
 
 
 class Trainer:
@@ -42,21 +47,15 @@ class Trainer:
     using Optuna for hyperparameter search.
     """
 
+    model: Yolo
     filters_path: List[Type[IsFilterAdapter]]
-    samples: List[Sample]
-
-    class Task(BaseModel):
-        """
-        Represents a single optimization task, storing the iteration and parameters.
-        """
-
-        iteration: int = Field(..., description="Iteration number of the task.")
-        parameters: List[BaseModel] = Field(
-            ..., description="List of hyperparameter sets."
-        )
+    samples: List[StoredSample]
 
     def __init__(
-        self, filters_path: List[Type[IsFilterAdapter]], samples: List[Sample]
+        self,
+        model: Yolo,
+        filters_path: List[Type[IsFilterAdapter]],
+        samples: List[StoredSample],
     ) -> None:
         """
         Initialize the Trainer.
@@ -78,6 +77,7 @@ class Trainer:
         if all([filter == NoOpFilterAdapter for filter in filters_path]):
             raise ValueError("The filter path cannot consist solely of NO_OP filters.")
 
+        self.model = model
         self.filters_path = filters_path
         self.samples = samples
 
@@ -89,9 +89,9 @@ class Trainer:
             trial: Optuna trial object.
 
         Returns:
-            Simulated YOLO accuracy (float).
+            YOLO accuracy (float).
         """
-        hyperparameters: List[BaseModel] = []
+        parameters: List[BaseModel] = []
 
         # Suggest hyperparameters for each filter in the path
         for filter_class in self.filters_path:
@@ -105,7 +105,7 @@ class Trainer:
 
                 # Extract hyperparameter hints from type metadata
                 for field_hint in type_hints.__metadata__:
-                    if isinstance(field_hint, FilterHyperparametersHint):
+                    if isinstance(field_hint, FilterParametersHint):
                         # Suggest integer hyperparameters
                         if field_type is int:
                             filter_suggested_parameters[field_name] = trial.suggest_int(
@@ -128,40 +128,45 @@ class Trainer:
                             )
 
             # Store the suggested parameters for this filter
-            hyperparameters.append(
+            parameters.append(
                 filter_class.parameters_class(**filter_suggested_parameters)
             )
 
         # Apply the filter pipeline to each image in the dataset
+        transformed_samples: List[TransientSample] = []
         for sample in tqdm(self.samples, desc="Applying filters", unit="img"):
             image = sample.load_image()
-            preprocessing_result = image.copy()
             for layer_index, filter_class in enumerate(self.filters_path):
-                preprocessing_result = filter_class.apply_filter(
-                    image=preprocessing_result,
-                    parameters=hyperparameters[layer_index],
-                )
+                parametrized_filter = filter_class.parametrized(parameters[layer_index])
+                image = parametrized_filter.apply(image)
+            transformed_samples.append(
+                TransientSample(numpy_image=image, labels=sample.labels)
+            )
 
-        # Simulate YOLO inference latency and accuracy evaluation
-        time.sleep(0.1)  # Simulate processing time
-        return np.random.uniform(0.2, 0.7)  # Simulated accuracy
+        transient_dataset = Dataset.create_transient_dataset(transformed_samples)
+        staging_dataset = transient_dataset.to_staging_dataset()
+
+        return self.model.evaluate(staging_dataset)
 
 
 if __name__ == "__main__":
     # Create or load an Optuna study for YOLO preprocessing optimization
     study = optuna.create_study(
-        study_name="yolo_preprocessing_optimization",
+        study_name="yolo_preprocessing_optimization_2",
         storage="sqlite:///yolo_preprocessing_optimization.db",
         load_if_exists=True,
         direction="maximize",
     )
 
-    dataset = Dataset()
-    dataset.load_from_path(Path("resources/dataset"))
-    samples = dataset.pick_random_samples(20)
+    dataset = Dataset.load_from_directory(Path("resources/dataset"))
+    samples = dataset.pick_random_samples(
+        10, magnitude=Magnitude.LCM, split=DatasetSplit.VAL
+    )
+    model = Yolo.load_model(Path("resources/model.pt"))
 
     # Instantiate the Trainer with a sequence of filter adapters and a random dataset
     trainer = Trainer(
+        model=model,
         filters_path=[
             MedianBlurFilterAdapter,
             SaturationBoostFilterAdapter,
@@ -172,7 +177,7 @@ if __name__ == "__main__":
     )
 
     # Run the optimization for 100 trials
-    study.optimize(trainer.objective, n_trials=100)
+    study.optimize(trainer.objective, n_trials=30)
 
     # Print the best hyperparameters found
     print(study.best_params)

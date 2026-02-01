@@ -16,7 +16,7 @@ Filter Types Implemented:
 - Unsharp Mask (edge sharpening)
 - Laplacian Sharpen (edge sharpening)
 
-Each filter exposes its hyperparameters, with descriptions of their effects and how
+Each filter exposes its parameters, with descriptions of their effects and how
 changing their values influences the filter's behavior.
 """
 
@@ -34,7 +34,7 @@ from typing import (
 import numpy as np
 from pydantic import BaseModel, Field
 
-FilterHyperparameters = TypeVar("FilterHyperparameters", bound=BaseModel)
+FilterParameters = TypeVar("FilterParameters", bound=BaseModel)
 
 
 class FilterType(IntEnum):
@@ -56,19 +56,19 @@ class FilterType(IntEnum):
     EDGE_SHARPNING = auto()
 
 
-HyperparameterType = TypeVar("HyperparameterType", int, float)
+ParameterType = TypeVar("ParameterType", int, float)
 
 
-class FilterHyperparametersHint(Generic[HyperparameterType]):
-    lower_bound: HyperparameterType
-    upper_bound: HyperparameterType
-    step: Optional[HyperparameterType]
+class FilterParametersHint(Generic[ParameterType]):
+    lower_bound: ParameterType
+    upper_bound: ParameterType
+    step: Optional[ParameterType]
 
     def __init__(
         self,
-        lower_bound: HyperparameterType,
-        upper_bound: HyperparameterType,
-        step: Optional[HyperparameterType],
+        lower_bound: ParameterType,
+        upper_bound: ParameterType,
+        step: Optional[ParameterType],
     ):
         self.lower_bound = lower_bound
         self.upper_bound = upper_bound
@@ -82,8 +82,8 @@ class FilterAdapterMeta(ABCMeta):
     All concrete FilterAdapter subclasses must define:
         - 'name' (str): A unique identifier for the filter.
         - 'filter_type' (FilterType): The category/type of the filter.
-        - 'initial_hyperparameters' (FilterHyperparameters): Default parameter values.
-        - 'parameters_class' (Type[FilterHyperparameters]): The class defining filter parameters.
+        - 'initial_parameters' (FilterParameters): Default parameter values.
+        - 'parameters_class' (Type[FilterParameters]): The class defining filter parameters.
 
     This metaclass validates these attributes at class definition time, ensuring
     consistent interface across all filter implementations.
@@ -102,8 +102,8 @@ class FilterAdapterMeta(ABCMeta):
                 f"Class '{name}' must define the class attribute 'filter_type'."
             )
 
-        if "initial_hyperparameters" not in dct:
-            raise TypeError(f"Class '{name}' must define 'initial_hyperparameters'.")
+        if "initial_parameters" not in dct:
+            raise TypeError(f"Class '{name}' must define 'initial_parameters'.")
 
         if "parameters_class" not in dct:
             raise TypeError(f"Class '{name}' must define 'parameters_class'.")
@@ -111,23 +111,24 @@ class FilterAdapterMeta(ABCMeta):
         return super().__new__(mcls, name, bases, dct)
 
 
-class IsFilterAdapter(Protocol[FilterHyperparameters]):
+class IsFilterAdapter(Protocol[FilterParameters]):
     """
     Protocol for classes that have filter attributes.
     """
 
     name: str
     filter_type: FilterType
-    initial_hyperparameters: FilterHyperparameters
+    initial_parameters: FilterParameters
     parameters_class: Type
 
     @staticmethod
-    def apply_filter(
-        image: np.ndarray, parameters: FilterHyperparameters
-    ) -> np.ndarray: ...
+    def apply_filter(image: np.ndarray, parameters: FilterParameters) -> np.ndarray: ...
+
+    @classmethod
+    def parametrized(cls, parameters: FilterParameters) -> "ParametrizedFilter": ...
 
 
-class FilterAdapter(ABC, Generic[FilterHyperparameters], metaclass=FilterAdapterMeta):
+class FilterAdapter(ABC, Generic[FilterParameters], metaclass=FilterAdapterMeta):
     """
     Abstract Base Class for image filter adapters.
 
@@ -135,7 +136,7 @@ class FilterAdapter(ABC, Generic[FilterHyperparameters], metaclass=FilterAdapter
         - name: Unique string identifier for the filter.
         - filter_type: The category/type of the filter.
         - parameters_class: The Pydantic model for filter parameters.
-        - initial_hyperparameters: Default parameter values.
+        - initial_parameters: Default parameter values.
 
     Each subclass must implement the apply_filter method, which applies the filter
     to an image using the provided parameters.
@@ -143,20 +144,42 @@ class FilterAdapter(ABC, Generic[FilterHyperparameters], metaclass=FilterAdapter
 
     @staticmethod
     @abstractmethod
-    def apply_filter(
-        image: np.ndarray, parameters: FilterHyperparameters
-    ) -> np.ndarray:
+    def apply_filter(image: np.ndarray, parameters: FilterParameters) -> np.ndarray:
         """
         Apply the filter to the provided image using the given parameters.
 
         Args:
             image: Input image as a NumPy array.
-            parameters: Filter-specific hyperparameters.
+            parameters: Filter-specific parameters.
 
         Returns:
             The filtered image as a NumPy array.
         """
         pass
+
+    @classmethod
+    def parametrized(cls, parameters: FilterParameters) -> "ParametrizedFilter":
+        """
+        Create a ParametrizedFilter instance with the given parameters.
+
+        Args:
+            parameters: Filter-specific parameters.
+
+        Returns:
+            An instance of ParametrizedFilter.
+        """
+        return ParametrizedFilter(adapter=cls, parameters=parameters)
+
+
+FilterParametersT = TypeVar("FilterParametersT", bound=BaseModel)
+
+
+class ParametrizedFilter(BaseModel, Generic[FilterParametersT]):
+    adapter: Type[FilterAdapter]
+    parameters: FilterParametersT
+
+    def apply(self, image: np.ndarray) -> np.ndarray:
+        return self.adapter.apply_filter(image, self.parameters)
 
 
 class NoOpFilterParameters(BaseModel):
@@ -179,7 +202,7 @@ class NoOpFilterAdapter(FilterAdapter[NoOpFilterParameters]):
     name = "NoOpFilter"
     filter_type = FilterType.NO_OP
     parameters_class = NoOpFilterParameters
-    initial_hyperparameters = NoOpFilterParameters()
+    initial_parameters = NoOpFilterParameters()
 
     @staticmethod
     def apply_filter(image: np.ndarray, parameters: NoOpFilterParameters) -> np.ndarray:
@@ -202,7 +225,7 @@ class MedianBlurParameters(BaseModel):
     kernel_size: Annotated[
         int,
         Field(default=3, ge=1, description="Size of the median filter kernel."),
-        FilterHyperparametersHint(lower_bound=3, upper_bound=5, step=2),
+        FilterParametersHint(lower_bound=3, upper_bound=5, step=2),
     ]
 
 
@@ -220,7 +243,7 @@ class MedianBlurFilterAdapter(FilterAdapter[MedianBlurParameters]):
     name = "MedianBlur"
     filter_type = FilterType.NOISE_REDUCTION
     parameters_class = MedianBlurParameters
-    initial_hyperparameters = MedianBlurParameters(kernel_size=3)
+    initial_parameters = MedianBlurParameters(kernel_size=3)
 
     @staticmethod
     def apply_filter(image: np.ndarray, parameters: MedianBlurParameters) -> np.ndarray:
@@ -243,17 +266,17 @@ class BilateralFilterParameters(BaseModel):
     diameter: Annotated[
         int,
         Field(default=5, ge=1, description="Diameter of each pixel neighborhood."),
-        FilterHyperparametersHint(lower_bound=3, upper_bound=9, step=1),
+        FilterParametersHint(lower_bound=3, upper_bound=9, step=1),
     ]
     sigmaColor: Annotated[
         float,
         Field(default=50.0, ge=0.0, description="Filter sigma in color space."),
-        FilterHyperparametersHint(lower_bound=25.0, upper_bound=75.0, step=5.0),
+        FilterParametersHint(lower_bound=25.0, upper_bound=75.0, step=5.0),
     ]
     sigmaSpace: Annotated[
         float,
         Field(default=50.0, ge=0.0, description="Filter sigma in coordinate space."),
-        FilterHyperparametersHint(lower_bound=25.0, upper_bound=75.0, step=5.0),
+        FilterParametersHint(lower_bound=25.0, upper_bound=75.0, step=5.0),
     ]
 
 
@@ -273,7 +296,7 @@ class BilateralFilterAdapter(FilterAdapter[BilateralFilterParameters]):
     name = "BilateralFilter"
     filter_type = FilterType.NOISE_REDUCTION
     parameters_class = BilateralFilterParameters
-    initial_hyperparameters = BilateralFilterParameters(
+    initial_parameters = BilateralFilterParameters(
         diameter=5, sigmaColor=50.0, sigmaSpace=50.0
     )
 
@@ -314,7 +337,7 @@ class SaturationBoostParameters(BaseModel):
     boost_factor: Annotated[
         float,
         Field(default=1.3, ge=0.0, description="Factor to boost saturation."),
-        FilterHyperparametersHint(lower_bound=1.0, upper_bound=2.0, step=0.1),
+        FilterParametersHint(lower_bound=1.0, upper_bound=2.0, step=0.1),
     ]
 
 
@@ -334,7 +357,7 @@ class SaturationBoostFilterAdapter(FilterAdapter[SaturationBoostParameters]):
     name = "SaturationBoost"
     filter_type = FilterType.COLOR_CORRECTION
     parameters_class = SaturationBoostParameters
-    initial_hyperparameters = SaturationBoostParameters(boost_factor=1.3)
+    initial_parameters = SaturationBoostParameters(boost_factor=1.3)
 
     @staticmethod
     def apply_filter(
@@ -377,12 +400,12 @@ class ClaheParameters(BaseModel):
     clip_limit: Annotated[
         float,
         Field(ge=0.0, description="Threshold for contrast limiting."),
-        FilterHyperparametersHint(lower_bound=1.0, upper_bound=5.0, step=0.5),
+        FilterParametersHint(lower_bound=1.0, upper_bound=5.0, step=0.5),
     ]
     tile_grid_size: Annotated[
         int,
         Field(description="Size of grid for histogram equalization."),
-        FilterHyperparametersHint(lower_bound=4, upper_bound=16, step=4),
+        FilterParametersHint(lower_bound=4, upper_bound=16, step=4),
     ]
 
 
@@ -401,7 +424,7 @@ class SoftClaheFilterAdapter(FilterAdapter[ClaheParameters]):
     name = "CLAHE (with starting 'clip limit' set to 2.0)"
     filter_type = FilterType.CONTRAST_ENHANCEMENT
     parameters_class = ClaheParameters
-    initial_hyperparameters = ClaheParameters(clip_limit=2.0, tile_grid_size=8)
+    initial_parameters = ClaheParameters(clip_limit=2.0, tile_grid_size=8)
 
     @staticmethod
     def apply_filter(image: np.ndarray, parameters: ClaheParameters) -> np.ndarray:
@@ -448,7 +471,7 @@ class HardClaheFilterAdapter(FilterAdapter[ClaheParameters]):
     name = "CLAHE (with starting 'clip limit' set to 4.0)"
     filter_type = FilterType.CONTRAST_ENHANCEMENT
     parameters_class = ClaheParameters
-    initial_hyperparameters = ClaheParameters(clip_limit=4.0, tile_grid_size=8)
+    initial_parameters = ClaheParameters(clip_limit=4.0, tile_grid_size=8)
 
     @staticmethod
     def apply_filter(image: np.ndarray, parameters: ClaheParameters) -> np.ndarray:
@@ -494,7 +517,7 @@ class GammaCorrectionParameters(BaseModel):
     gamma: Annotated[
         float,
         Field(default=1.2, gt=0.0, description="Gamma value for correction."),
-        FilterHyperparametersHint(lower_bound=0.8, upper_bound=1.4, step=0.1),
+        FilterParametersHint(lower_bound=0.8, upper_bound=1.4, step=0.1),
     ]
 
 
@@ -511,7 +534,7 @@ class GammaCorrectionFilterAdapter(FilterAdapter[GammaCorrectionParameters]):
     name = "GammaCorrection"
     filter_type = FilterType.COLOR_CORRECTION
     parameters_class = GammaCorrectionParameters
-    initial_hyperparameters = GammaCorrectionParameters(gamma=1.2)
+    initial_parameters = GammaCorrectionParameters(gamma=1.2)
 
     @staticmethod
     def apply_filter(
@@ -553,12 +576,12 @@ class UnsharpMaskParameters(BaseModel):
         Field(
             default=1.2, gt=0.0, description="Gaussian blur sigma for unsharp masking."
         ),
-        FilterHyperparametersHint(lower_bound=0.5, upper_bound=2.0, step=0.1),
+        FilterParametersHint(lower_bound=0.5, upper_bound=2.0, step=0.1),
     ]
     strength: Annotated[
         float,
         Field(default=1.5, gt=0.0, description="Strength of the sharpening effect."),
-        FilterHyperparametersHint(lower_bound=0.5, upper_bound=3.0, step=0.25),
+        FilterParametersHint(lower_bound=0.5, upper_bound=3.0, step=0.25),
     ]
 
 
@@ -577,7 +600,7 @@ class UnsharpMaskFilterAdapter(FilterAdapter[UnsharpMaskParameters]):
     name = "UnsharpMask"
     filter_type = FilterType.EDGE_SHARPNING
     parameters_class = UnsharpMaskParameters
-    initial_hyperparameters = UnsharpMaskParameters(sigma=1.2, strength=1.5)
+    initial_parameters = UnsharpMaskParameters(sigma=1.2, strength=1.5)
 
     @staticmethod
     def apply_filter(
@@ -624,19 +647,19 @@ class LaplacianSharpenParameters(BaseModel):
     ksize: Annotated[
         int,
         Field(default=3, ge=1, description="Kernel size (must be odd and positive)."),
-        FilterHyperparametersHint(lower_bound=1, upper_bound=3, step=2),
+        FilterParametersHint(lower_bound=1, upper_bound=3, step=2),
     ]
     scale: Annotated[
         float,
         Field(
             default=1.0, description="Optional scale factor for the computed Laplacian."
         ),
-        FilterHyperparametersHint(lower_bound=0.5, upper_bound=2.0, step=0.1),
+        FilterParametersHint(lower_bound=0.5, upper_bound=2.0, step=0.1),
     ]
     delta: Annotated[
         float,
         Field(default=0.0, description="Optional delta value added to the results."),
-        FilterHyperparametersHint(lower_bound=0.0, upper_bound=0.0, step=None),
+        FilterParametersHint(lower_bound=0.0, upper_bound=0.0, step=None),
     ]
 
 
@@ -656,7 +679,7 @@ class LaplacianSharpenFilterAdapter(FilterAdapter[LaplacianSharpenParameters]):
     name = "LaplacianSharpen"
     filter_type = FilterType.EDGE_SHARPNING
     parameters_class = LaplacianSharpenParameters
-    initial_hyperparameters = LaplacianSharpenParameters(ksize=3, scale=1.0, delta=0.0)
+    initial_parameters = LaplacianSharpenParameters(ksize=3, scale=1.0, delta=0.0)
 
     @staticmethod
     def apply_filter(
