@@ -8,21 +8,26 @@ component and its parameters.
 
 Main Components:
 - Label: Represents the coordinates for the four corners of an image label.
-- Sample: Encapsulates an image, its labels, and its magnitude (HCM or LCM).
-- Dataset: Manages a collection of samples, supports loading, copying, and random sampling.
+- Sample: Encapsulates an image and its labels.
+- StoredSample: Sample stored on filesystem with lazy image loading.
+- TransientSample: Sample with image data in memory.
+- Dataset: Abstract base class for managing collections of samples.
+- StoredDataset: Dataset stored on filesystem.
+- StagingDataset: Temporary dataset for staging samples before persistence.
+- TransientDataset: In-memory dataset for volatile data operations.
 
 Each class exposes its fields with descriptions, and methods are documented for clarity and maintainability.
 """
 
 import tempfile
-from abc import ABC
+from abc import ABC, abstractmethod
 from enum import IntEnum, StrEnum, auto
 from pathlib import Path
-from typing import List, Optional, Self
+from typing import Generic, List, Optional, Self, TypeVar
 from warnings import deprecated
 
 import numpy as np
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 
 class MalariaStage(IntEnum):
@@ -59,56 +64,68 @@ class DatasetSplit(StrEnum):
 
 class Label(BaseModel):
     """
-    Represents a label for an image, containing the coordinates for the four corners and the malaria stage.
+    Represents a label for an image in YOLO format.
 
     Attributes:
         malaria_stage (MalariaStage): Malaria stage associated with the label.
-        top_left (float): Top-left coordinate value.
-        top_right (float): Top-right coordinate value.
-        bottom_left (float): Bottom-left coordinate value.
-        bottom_right (float): Bottom-right coordinate value.
+        x_center (float): Normalized x-coordinate of bounding box center.
+        y_center (float): Normalized y-coordinate of bounding box center.
+        width (float): Normalized width of bounding box.
+        height (float): Normalized height of bounding box.
     """
 
     malaria_stage: MalariaStage = Field(
         ..., description="Malaria stage associated with the label."
     )
-    top_left: float = Field(..., description="Top-left coordinate value.")
-    top_right: float = Field(..., description="Top-right coordinate value.")
-    bottom_left: float = Field(..., description="Bottom-left coordinate value.")
-    bottom_right: float = Field(..., description="Bottom-right coordinate value.")
+    x_center: float = Field(
+        ..., description="Normalized x-coordinate of bounding box center."
+    )
+    y_center: float = Field(
+        ..., description="Normalized y-coordinate of bounding box center."
+    )
+    width: float = Field(..., description="Normalized width of bounding box.")
+    height: float = Field(..., description="Normalized height of bounding box.")
 
     @classmethod
-    def from_yolo_format(cls, yolo_string: str) -> Self:
+    def from_string_line(cls, line: str) -> Self:
         """
         Creates a Label instance from a YOLO format string.
+
         Args:
-            yolo_string (str): YOLO formatted string for the label.
+            line (str): YOLO formatted string for the label.
+
         Returns:
             Label: The created Label instance.
+
+        Raises:
+            Exception: If the format string is invalid.
         """
 
-        format_parts = yolo_string.strip().split()
+        format_parts = line.strip().split()
         if len(format_parts) != 5:
-            raise Exception("Invalid YOLO format string.")
+            raise Exception(
+                "Invalid YOLO format string. Expected 5 space-separated values."
+            )
 
         return cls(
             malaria_stage=MalariaStage(int(format_parts[0])),
-            top_left=float(format_parts[1]),
-            top_right=float(format_parts[2]),
-            bottom_left=float(format_parts[3]),
-            bottom_right=float(format_parts[4]),
+            x_center=float(format_parts[1]),
+            y_center=float(format_parts[2]),
+            width=float(format_parts[3]),
+            height=float(format_parts[4]),
         )
 
-    def to_yolo_format(self) -> str:
+    def to_string_line(self) -> str:
         """
         Converts the label to YOLO format string.
+
         Returns:
             str: YOLO formatted string for the label.
         """
-        return f"{self.malaria_stage.value} {self.top_left} {self.top_right} {self.bottom_left} {self.bottom_right}"
+        return f"{self.malaria_stage.value} {self.x_center} {self.y_center} {self.width} {self.height}"
 
 
-class SampleMagnitude(StrEnum):
+class Magnitude(StrEnum):
     """
     Enum for sample magnitudes.
 
@@ -121,34 +138,20 @@ class SampleMagnitude(StrEnum):
     LCM = "lcm"
 
 
-class Sample(BaseModel):
+class Sample(ABC, BaseModel):
     """
-    Represents a single dataset sample, including image path, labels, and magnitude.
+    Abstract base class representing a single dataset sample.
 
     Attributes:
-        image_path (Path): Path to the image file.
-        labels_path (Optional[Path]): Path to the labels file.
         labels (List[Label]): List of labels for the image.
-        magnitude (SampleMagnitude): Sample magnitude (HCM or LCM).
-        split (Optional[DatasetSplit]): Dataset split (train, test, val).
     """
 
-    image_path: Path = Field(..., description="Path to the image file.")
-    labels_path: Optional[Path] = Field(
-        default=None, description="Path to the labels file."
-    )
     labels: List[Label] = Field(description="List of labels for the image.")
-    magnitude: SampleMagnitude = Field(
-        ..., description="Sample magnitude (HCM or LCM)."
-    )
-    split: Optional[DatasetSplit] = Field(
-        ..., description="Dataset split (train, test, val)."
-    )
-    _numpy_image: Optional[np.ndarray] = PrivateAttr(default=None)
 
+    @abstractmethod
     def load_image(self) -> np.ndarray:
         """
-        Loads the image from disk as a numpy array and caches it.
+        Loads the image as a numpy array.
 
         Returns:
             np.ndarray: The loaded image.
@@ -156,15 +159,68 @@ class Sample(BaseModel):
         Raises:
             Exception: If the image cannot be loaded.
         """
-        if self._numpy_image is None:
+        ...
+
+    def apply_transform(self, filters: List["ParametrizedFilter"]) -> "TransientSample":
+        """
+        Applies a sequence of filters to the image and returns a TransientSample.
+
+        Args:
+            filters (List[ParametrizedFilter]): List of filters to apply sequentially.
+
+        Returns:
+            TransientSample: A new transient sample with the transformed image.
+        """
+        image = self.load_image()
+        for filter in filters:
+            image = filter.apply(image)
+
+        return TransientSample(
+            numpy_image=image,
+            labels=self.labels,
+        )
+
+
+class StoredSample(Sample):
+    """
+    Represents a sample stored on the filesystem with lazy image loading.
+
+    Attributes:
+        image_path (Path): Path to the image file.
+        labels_path (Path): Path to the labels file.
+        magnitude (Optional[Magnitude]): Sample magnitude (HCM or LCM).
+        split (Optional[DatasetSplit]): Dataset split (train, test, val).
+    """
+
+    image_path: Path = Field(..., description="Path to the image file.")
+    labels_path: Path = Field(..., description="Path to the labels file.")
+    magnitude: Optional[Magnitude] = Field(
+        default=None, description="Sample magnitude (HCM or LCM)."
+    )
+    dataset_split: Optional[DatasetSplit] = Field(
+        default=None, description="Dataset split (train, test, val)."
+    )
+    _cached_numpy_image: Optional[np.ndarray] = PrivateAttr(default=None)
+
+    def load_image(self) -> np.ndarray:
+        """
+        Loads the image from disk as a numpy array and caches it.
+
+        Returns:
+            np.ndarray: A copy of the loaded image.
+
+        Raises:
+            Exception: If the image cannot be loaded.
+        """
+        if self._cached_numpy_image is None:
             import cv2
 
-            image = cv2.imread(self.image_path.as_posix())
-            if image is None:
-                raise Exception(f"Failed to load image '{self.image_path.as_posix()}'.")
-            self._numpy_image = image
+            loaded_image = cv2.imread(str(self.image_path))
+            if loaded_image is None:
+                raise Exception(f"Failed to load image '{self.image_path}'.")
+            self._cached_numpy_image = loaded_image
 
-        return self._numpy_image
+        return self._cached_numpy_image.copy()
 
     def unload_image(self):
         """
@@ -172,281 +228,596 @@ class Sample(BaseModel):
         """
         self._numpy_image = None
 
+    def to_transient_sample(
+        self, unload_after_conversion: bool = True
+    ) -> "TransientSample":
+        """
+        Converts the StoredSample to a TransientSample by loading the image into memory.
 
-class Dataset(ABC):
+        Args:
+            unload_after_conversion (bool): If True, unloads the cached image after conversion. Default is True.
+
+        Returns:
+            TransientSample: The converted in-memory sample.
+        """
+        loaded_image = self.load_image()
+        transient_sample = TransientSample(
+            labels=self.labels,
+            numpy_image=loaded_image,
+        )
+        if unload_after_conversion:
+            self.unload_image()
+        return transient_sample
+
+
+class TransientSample(Sample):
     """
-    Represents a dataset containing multiple samples.
+    Represents a sample with image data held in memory (volatile/non-persistent).
+
+    Attributes:
+        numpy_image (np.ndarray): The image data as a numpy array.
+    """
+
+    numpy_image: np.ndarray = Field(...)
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    def load_image(self) -> np.ndarray:
+        """
+        Returns a copy of the in-memory image.
+
+        Returns:
+            np.ndarray: A copy of the image.
+        """
+
+        return self.numpy_image.copy()
+
+    def store_image(self, image_path: Path, labels_path: Path):
+        """
+        Stores the image and labels to disk.
+
+        Args:
+            image_path (Path): Destination path for the image file.
+            labels_path (Path): Destination path for the labels file.
+
+        Raises:
+            Exception: If paths already exist or are directories.
+        """
+        import cv2
+
+        if image_path.exists():
+            raise Exception(f"Image path '{image_path}' already exists.")
+
+        if image_path.is_dir():
+            raise Exception(f"Image path '{image_path}' is a directory.")
+
+        if labels_path.exists():
+            raise Exception(f"Labels path '{labels_path}' already exists.")
+
+        if labels_path.is_dir():
+            raise Exception(f"Labels path '{labels_path}' is a directory.")
+
+        cv2.imwrite(str(image_path), self.numpy_image)
+
+        labels_yolo = "\n".join([label.to_string_line() for label in self.labels])
+        labels_path.write_text(labels_yolo)
+
+
+SampleT = TypeVar("SampleT", bound=Sample)
+
+
+class Dataset(ABC, Generic[SampleT]):
+    """
+    Abstract base class representing a dataset containing multiple samples.
 
     Attributes:
         base_path (Optional[Path]): Base directory of the dataset.
-        samples (List[Sample]): List of loaded samples.
+        samples (List[SampleT]): List of loaded samples.
     """
 
-    base_path: Optional[Path] = None  # Base directory of the dataset
-    samples: List[Sample] = []  # List of loaded samples
+    base_path: Optional[Path] = None
+    samples: List[SampleT] = []
 
-    @classmethod
-    def load_from_kaggle(
-        cls, destination_path: Optional[Path] = None
-    ) -> FileSystemDataset:
+    def __init__(self):
+        """
+        Initializes a new Dataset instance.
+        """
+        self.base_path: Optional[Path] = None
+        self.samples: List[SampleT] = []
+
+    @staticmethod
+    def load_from_kaggle(destination_path: Optional[Path] = None) -> "StoredDataset":
         """
         Downloads and loads the dataset from Kaggle.
+
         Args:
             destination_path (Optional[Path]): Where to download the dataset.
+
+        Returns:
+            StoredDataset: The loaded dataset from Kaggle.
         """
         import kagglehub
 
         download_path = kagglehub.dataset_download(
-            "davidesenette/malariahcm-lcm-1000",
-            path=destination_path.as_posix() if destination_path else None,
+            "davidesenette/malaria-hcm-lcm-1000",
+            path=str(destination_path) if destination_path else None,
         )
 
-        instance = object.__new__(FileSystemDataset)
+        instance = object.__new__(StoredDataset)
         instance.base_path = Path(download_path)
         instance._load_samples()
         return instance
 
-    @classmethod
-    def load_from_path(cls, path: Path) -> FileSystemDataset:
+    @staticmethod
+    def load_from_directory(path: Path) -> "StoredDataset":
         """
         Loads the dataset from a local directory.
+
         Args:
             path (Path): Path to the dataset directory.
+
+        Returns:
+            StoredDataset: The loaded dataset.
+
         Raises:
             Exception: If the path does not exist or is not a directory.
         """
         if not path.exists():
-            raise Exception("Given path doesn't exist.")
+            raise Exception(f"Given path '{path}' doesn't exist.")
 
         if not path.is_dir():
-            raise Exception("Given path is not a directory.")
+            raise Exception(f"Given path '{path}' is not a directory.")
 
-        instance = object.__new__(FileSystemDataset)
+        instance = object.__new__(StoredDataset)
         instance.base_path = path
         instance._load_samples()
         return instance
 
-    @classmethod
-    def create_temporary(cls, samples: List[Sample]) -> TemporaryDataset:
+    @staticmethod
+    def create_staging(samples: List[StoredSample]) -> "StagingDataset":
+        """
+        Creates a staging dataset from a list of StoredSample instances by copying their files to a temporary directory.
+
+        Args:
+            samples (List[StoredSample]): List of stored samples to include in the staging dataset.
+
+        Returns:
+            StagingDataset: The created staging dataset.
+
+        Raises:
+            Exception: If a sample does not have a valid labels_path.
+        """
         from tqdm import tqdm
 
-        temporary_directory = tempfile.TemporaryDirectory()
-        temporary_directory_path = Path(temporary_directory.name)
+        staging_temporary_directory = tempfile.TemporaryDirectory()
+        staging_directory_path = Path(staging_temporary_directory.name)
 
-        images_path = temporary_directory_path / "images"
-        labels_path = temporary_directory_path / "labels"
+        staging_images_directory = staging_directory_path / "images"
+        staging_labels_directory = staging_directory_path / "labels"
 
-        images_path.mkdir(parents=True, exist_ok=True)
-        labels_path.mkdir(parents=True, exist_ok=True)
+        staging_images_directory.mkdir(parents=True, exist_ok=True)
+        staging_labels_directory.mkdir(parents=True, exist_ok=True)
 
-        temporary_samples: List[Sample] = []
+        staging_samples: List[StoredSample] = []
 
-        for sample in tqdm(
-            samples, desc="Copying samples in a temporary directory.", unit="img"
+        for source_sample in tqdm(
+            samples, desc="Copying samples to staging directory", unit="sample"
         ):
-            if sample.labels_path is None:
+            if source_sample.labels_path is None:
                 raise Exception(
-                    "A sample created without a path cannot be copied to a temporary dataset."
+                    "Cannot copy sample to staging dataset: labels_path is None."
                 )
 
-            temporary_image_path = images_path / sample.image_path.name
-            temporary_labels_path = labels_path / sample.labels_path.name
-
-            sample.image_path.copy(
-                temporary_image_path.as_posix(),
-            )
-            sample.labels_path.copy(
-                temporary_labels_path.as_posix(),
+            staged_image_path = staging_images_directory / source_sample.image_path.name
+            staged_labels_path = (
+                staging_labels_directory / source_sample.labels_path.name
             )
 
-            temporary_samples.append(
-                Sample(
-                    image_path=temporary_image_path,
-                    labels_path=temporary_labels_path,
-                    labels=sample.labels,
-                    magnitude=sample.magnitude,
-                    split=sample.split,
+            from shutil import copy2
+
+            copy2(source_sample.image_path, staged_image_path)
+            copy2(source_sample.labels_path, staged_labels_path)
+
+            staging_samples.append(
+                StoredSample(
+                    image_path=staged_image_path,
+                    labels_path=staged_labels_path,
+                    labels=source_sample.labels,
+                    magnitude=source_sample.magnitude,
+                    dataset_split=getattr(source_sample, "split", None),
                 )
             )
 
-        instance = object.__new__(TemporaryDataset)
-        instance.base_path = temporary_directory_path
-        instance.temporary_directory = temporary_directory
-        instance.samples = temporary_samples
+        instance = object.__new__(StagingDataset)
+        instance.base_path = staging_directory_path
+        instance.temporary_directory = staging_temporary_directory
+        instance.samples = staging_samples
+        return instance
+
+    @staticmethod
+    def create_transient_dataset(samples: List[TransientSample]) -> "TransientDataset":
+        """
+        Creates a transient (in-memory) dataset from a list of TransientSample instances.
+
+        Args:
+            samples (List[TransientSample]): List of transient samples.
+
+        Returns:
+            TransientDataset: The created in-memory dataset.
+        """
+        instance = object.__new__(TransientDataset)
+        instance.base_path = None
+        instance.samples = samples
         return instance
 
     def unload_cached_images(self):
         """
-        Unloads all cached images from memory for all samples.
+        Unloads all cached images from memory for all StoredSample instances.
         """
         from tqdm import tqdm
 
-        for sample in tqdm(self.samples, desc="Unloading images", unit="img"):
-            sample.unload_image()
+        for sample in tqdm(self.samples, desc="Unloading cached images", unit="sample"):
+            if isinstance(sample, StoredSample):
+                sample.unload_image()
 
     def pick_random_samples(
         self,
-        k: Optional[int] = None,
-        magnitude: Optional[SampleMagnitude] = None,
+        sample_count: Optional[int] = None,
+        magnitude: Optional[Magnitude] = None,
         split: Optional[DatasetSplit] = None,
-    ) -> List[Sample]:
+    ) -> List[SampleT]:
         """
-        Picks k random samples from the dataset.
-        Args:
-            k (int): Number of samples to pick.
-        Returns:
-            List[Sample]: List of randomly picked samples.
-        Raises:
-            Exception: If base_path is not set.
-        """
-        if self.base_path is None:
-            raise Exception(
-                "Use 'load_from_kaggle' or 'load_from_path' before trying to pick a sample."
-            )
+        Picks random samples from the dataset with optional filtering.
 
-        if k is None and magnitude is None and split is None:
-            raise Exception("At least one filtering parameter must be provided.")
+        Args:
+            sample_count (Optional[int]): Number of samples to pick. If None, returns all matching samples.
+            magnitude (Optional[Magnitude]): Filter by magnitude (HCM or LCM). Only applies to StoredSample instances.
+            split (Optional[DatasetSplit]): Filter by dataset split (train, test, val). Only applies to StoredSample instances.
+
+        Returns:
+            List[SampleT]: List of randomly picked samples.
+
+        Raises:
+            Exception: If no filtering parameters are provided or sample_count exceeds available samples.
+        """
+        if sample_count is None and magnitude is None and split is None:
+            raise Exception(
+                "At least one filtering parameter (sample_count, magnitude, or split) must be provided."
+            )
 
         import random
 
-        samples = self.samples
+        filtered_samples = self.samples
 
         if magnitude is not None:
-            samples = [sample for sample in samples if sample.magnitude == magnitude]
-
-        if split is not None:
-            samples = [
+            filtered_samples = [
                 sample
-                for sample in samples
-                if sample.split is not None and sample.split == split
+                for sample in filtered_samples
+                if isinstance(sample, StoredSample) and sample.magnitude == magnitude
             ]
 
-        if k is not None:
-            if k > len(samples):
-                raise Exception("Requested more samples than available in the dataset.")
-            samples = random.sample(samples, k)
+        if split is not None:
+            filtered_samples = [
+                sample
+                for sample in filtered_samples
+                if isinstance(sample, StoredSample) and sample.dataset_split == split
+            ]
 
-        return samples
+        if sample_count is not None:
+            if sample_count > len(filtered_samples):
+                raise Exception(
+                    f"Requested {sample_count} samples but only {len(filtered_samples)} are available after filtering."
+                )
+            filtered_samples = random.sample(filtered_samples, sample_count)
+
+        return filtered_samples
 
 
-class FileSystemDataset(Dataset):
+class StoredDataset(Dataset[StoredSample]):
     """
     Dataset implementation for datasets stored on the filesystem.
 
-    Provides methods for loading, copying, and cleaning up datasets.
+    Provides methods for loading, copying, and managing persistent datasets.
     """
 
     @deprecated(
-        "Use 'Template.load_from_kaggle' or 'Template.load_from_path' to instantiate FileSystemDataset."
+        "Use 'Dataset.load_from_kaggle' or 'Dataset.load_from_directory' to instantiate StoredDataset."
     )
-    def __init__(self, *args, **kwargs):
+    def __init__(self):
         """
         Prevent direct instantiation; use class methods instead.
+
+        Raises:
+            RuntimeError: Always raised to prevent direct instantiation.
         """
         raise RuntimeError(
-            "Use 'Template.load_from_kaggle' or 'Template.load_from_path' to instantiate FileSystemDataset."
+            "Use 'Dataset.load_from_kaggle' or 'Dataset.load_from_directory' to instantiate StoredDataset."
         )
 
     def _load_samples(self):
         """
         Loads all samples from the dataset directory into memory.
+
         Raises:
-            Exception: If base_path is not set or dataset is corrupted.
+            Exception: If base_path is not set, samples are already loaded, or dataset structure is invalid.
         """
         from tqdm import tqdm
 
         if self.base_path is None:
-            raise Exception("External use of '_load_sample' is prohibited.")
-        if len(self.samples) > 0:
-            print("Samples are already loaded.")
+            raise Exception("Cannot load samples: base_path is not set.")
 
         image_paths_generator = self.base_path.rglob("*.png")
 
         for image_path_absolute in tqdm(
-            image_paths_generator, desc="Loading samples", unit="img"
+            image_paths_generator, desc="Loading samples from disk", unit="sample"
         ):
-            image_path = image_path_absolute.relative_to(self.base_path)
+            image_path_relative = image_path_absolute.relative_to(self.base_path)
 
-            magnitude: SampleMagnitude
-            match image_path.parts[0]:
+            magnitude: Magnitude
+            match image_path_relative.parts[0]:
                 case "source":
-                    magnitude = SampleMagnitude.HCM
+                    magnitude = Magnitude.HCM
                 case "target":
-                    magnitude = SampleMagnitude.LCM
+                    magnitude = Magnitude.LCM
                 case _:
-                    raise Exception("Dataset seems to be corrupted.")
+                    raise Exception(
+                        f"Invalid dataset structure: unexpected directory '{image_path_relative.parts[0]}'."
+                    )
 
-            split = DatasetSplit(image_path.parts[2])
+            dataset_split = DatasetSplit(image_path_relative.parts[2])
 
-            labels_path = (
+            labels_file_path = (
                 self.base_path
-                / image_path.parts[0]
+                / image_path_relative.parts[0]
                 / "labels"
-                / Path(*image_path.parts[2:])
+                / Path(*image_path_relative.parts[2:])
             )
 
-            labels_path = labels_path.with_suffix(".txt")
-            labels_raw = labels_path.read_text()
-            labels: List[Label] = []
+            labels_file_path = labels_file_path.with_suffix(".txt")
+            labels_file_content = labels_file_path.read_text()
+            parsed_labels: List[Label] = []
 
-            for label_raw in labels_raw.splitlines():
-                labels.append(Label.from_yolo_format(label_raw))
+            for label_line in labels_file_content.splitlines():
+                parsed_labels.append(Label.from_string_line(label_line))
 
             self.samples.append(
-                Sample(
+                StoredSample(
                     image_path=image_path_absolute,
-                    labels_path=labels_path,
-                    labels=labels,
+                    labels_path=labels_file_path,
+                    labels=parsed_labels,
                     magnitude=magnitude,
-                    split=split,
+                    dataset_split=dataset_split,
                 )
             )
 
-    def copy_to(self, destination_path: Path):
+    def store(self, destination_path: Path):
         """
-        Copies the dataset to a new destination.
+        Copies the dataset to a new destination directory.
+
         Args:
             destination_path (Path): The path to copy the dataset to.
+
         Raises:
             Exception: If base_path is not set or destination already exists.
         """
         if self.base_path is None:
             raise Exception(
-                "Use 'load_from_kaggle' or 'load_from_path' before trying to copy the dataset."
+                "Cannot store dataset: base_path is not set. Use 'load_from_kaggle' or 'load_from_directory' first."
             )
 
         if destination_path.exists():
-            raise Exception("Destination path already exists.")
+            raise Exception(f"Destination path '{destination_path}' already exists.")
 
         from shutil import copytree
 
         destination_path.mkdir(parents=True)
-        copytree(self.base_path.as_posix(), str(destination_path))
+        copytree(str(self.base_path), str(destination_path))
 
 
-class TemporaryDataset(Dataset):
+class StagingDataset(StoredDataset):
     """
-    Dataset implementation for temporary datasets stored in a temporary directory.
+    Dataset implementation for staging datasets stored in a temporary directory.
+
+    This dataset type is used as an intermediate stage before persisting data,
+    automatically cleaning up temporary files when no longer needed.
 
     Attributes:
         temporary_directory (tempfile.TemporaryDirectory): Reference to the temporary directory for cleanup.
     """
 
-    temporary_directory: tempfile.TemporaryDirectory
+    temporary_directory: tempfile.TemporaryDirectory = PrivateAttr()
 
-    @deprecated("Use 'Template.create_temporary' to instantiate FileSystemDataset.")
-    def __init__(self, *_, **__):
+    @deprecated("Use 'Dataset.create_staging' to instantiate StagingDataset.")
+    def __init__(self):
         """
-        Prevents direct instantiation of TemporaryDataset.
-        Use the provided class methods for proper initialization.
+        Prevents direct instantiation of StagingDataset.
+
+        Raises:
+            RuntimeError: Always raised to prevent direct instantiation.
         """
         raise RuntimeError(
-            "Use 'Template.create_temporary' to instantiate FileSystemDataset."
+            "Use 'Dataset.create_staging' to instantiate StagingDataset."
         )
 
     def __del__(self):
         """
-        Cleans up the temporary directory if it exists when the object is deleted.
+        Cleans up the temporary directory when the object is garbage collected.
         """
-        if self.temporary_directory is not None:
+        if (
+            hasattr(self, "temporary_directory")
+            and self.temporary_directory is not None
+        ):
             self.temporary_directory.cleanup()
+
+
+class TransientDataset(Dataset[TransientSample]):
+    """
+    Dataset implementation for in-memory (transient/volatile) datasets.
+
+    Stores all sample data in memory for fast access and transformation operations.
+    Data is lost when the object is destroyed unless explicitly persisted.
+    """
+
+    @deprecated(
+        "Use 'Dataset.create_transient_dataset' to instantiate TransientDataset."
+    )
+    def __init__(self):
+        """
+        Prevent direct instantiation; use class methods instead.
+
+        Raises:
+            RuntimeError: Always raised to prevent direct instantiation.
+        """
+        raise RuntimeError(
+            "Use 'Dataset.create_transient_dataset' to instantiate TransientDataset."
+        )
+
+    def to_staging(self) -> StagingDataset:
+        """
+        Converts the transient dataset to a staging dataset by writing samples to a temporary directory.
+
+        Returns:
+            StagingDataset: A staging dataset with samples stored in a temporary directory.
+        """
+        import tempfile
+        import uuid
+
+        import tqdm
+
+        stored_samples: List[StoredSample] = []
+        staging_temporary_directory = tempfile.TemporaryDirectory()
+        staging_directory_path = Path(staging_temporary_directory.name)
+
+        for transient_sample in tqdm.tqdm(
+            self.samples, desc="Storing samples in staging directory", unit="sample"
+        ):
+            unique_sample_name = uuid.uuid4().hex
+
+            staged_image_path = (
+                staging_directory_path.joinpath("images")
+                .joinpath(unique_sample_name)
+                .with_suffix(".png")
+            )
+            staged_image_path.parent.mkdir(parents=True, exist_ok=True)
+
+            staged_labels_path = (
+                staging_directory_path.joinpath("labels")
+                .joinpath(unique_sample_name)
+                .with_suffix(".txt")
+            )
+            staged_labels_path.parent.mkdir(parents=True, exist_ok=True)
+
+            transient_sample.store_image(
+                image_path=staged_image_path,
+                labels_path=staged_labels_path,
+            )
+
+            stored_samples.append(
+                StoredSample(
+                    image_path=staged_image_path,
+                    labels_path=staged_labels_path,
+                    labels=transient_sample.labels,
+                )
+            )
+
+        instance = object.__new__(StagingDataset)
+        instance.base_path = staging_directory_path
+        instance.temporary_directory = staging_temporary_directory
+        instance.samples = stored_samples
+        return instance
+
+    def store(self, destination_path: Path) -> StoredDataset:
+        """
+        Persists the transient dataset to disk as a StoredDataset.
+
+        Args:
+            destination_path (Path): Directory where the dataset will be stored.
+
+        Returns:
+            StoredDataset: The newly created persistent dataset.
+
+        Raises:
+            Exception: If destination path already exists or is a file.
+        """
+        import uuid
+
+        import cv2
+        from tqdm import tqdm
+
+        if destination_path.exists():
+            raise Exception(f"Destination path '{destination_path}' already exists.")
+
+        if destination_path.is_file():
+            raise Exception(
+                f"Destination path '{destination_path}' is a file, expected directory."
+            )
+
+        destination_path.mkdir(parents=True, exist_ok=True)
+
+        destination_images_directory = destination_path / "images"
+        destination_labels_directory = destination_path / "labels"
+
+        destination_images_directory.mkdir(parents=True, exist_ok=True)
+        destination_labels_directory.mkdir(parents=True, exist_ok=True)
+
+        persisted_samples: List[StoredSample] = []
+
+        for transient_sample in tqdm(
+            self.samples, desc="Persisting samples to disk", unit="sample"
+        ):
+            unique_sample_name = uuid.uuid4().hex
+
+            persisted_image_path = destination_images_directory.joinpath(
+                unique_sample_name
+            ).with_suffix(".png")
+            persisted_labels_path = destination_labels_directory.joinpath(
+                unique_sample_name
+            ).with_suffix(".txt")
+
+            cv2.imwrite(str(persisted_image_path), transient_sample.numpy_image)
+            labels_yolo_format = "\n".join(
+                [label.to_string_line() for label in transient_sample.labels]
+            )
+            persisted_labels_path.write_text(labels_yolo_format)
+
+            persisted_samples.append(
+                StoredSample(
+                    image_path=persisted_image_path,
+                    labels_path=persisted_labels_path,
+                    labels=transient_sample.labels,
+                )
+            )
+
+        instance = object.__new__(StoredDataset)
+        instance.base_path = destination_path
+        instance.samples = persisted_samples
+        return instance
+
+
+if __name__ == "__main__":
+    from filters import (
+        ParametrizedFilter,
+        SoftClaheFilterAdapter,
+    )
+
+    source_dataset = Dataset.load_from_directory(Path("resources/dataset"))
+    random_samples: List[StoredSample] = source_dataset.pick_random_samples(10)
+    original_transient_dataset = Dataset.create_transient_dataset(
+        [sample.to_transient_sample() for sample in random_samples]
+    )
+    original_transient_dataset.store(Path("source_images/"))
+    transformed_samples: List[TransientSample] = []
+    for sample in random_samples:
+        transformed_sample = sample.apply_transform(
+            [
+                SoftClaheFilterAdapter.parametrized(
+                    SoftClaheFilterAdapter.initial_hyperparameters
+                )
+            ]
+        )
+        transformed_samples.append(transformed_sample)
+    transformed_transient_dataset = Dataset.create_transient_dataset(
+        transformed_samples
+    )
+    persisted_dataset = transformed_transient_dataset.store(Path("./saved_dataset"))
+    print("Finished processing dataset.")
