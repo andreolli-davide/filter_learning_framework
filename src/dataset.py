@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from enum import IntEnum, StrEnum, auto
 from pathlib import Path
 from typing import Generic, List, Optional, Self, TypeVar
-from warnings import deprecated
+from typing_extensions import deprecated
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr

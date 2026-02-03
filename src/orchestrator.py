@@ -37,7 +37,7 @@ from typing import (
 )
 
 import optuna
-from pydantic import BaseModel, BeforeValidator, Field, PlainSerializer
+from pydantic import BaseModel, Field, PlainSerializer
 
 from dataset import Dataset, DatasetSplit, Magnitude, StoredDataset
 from filters import (
@@ -54,6 +54,8 @@ from filters import (
 )
 from trainer import Trainer
 from yolo import Yolo
+
+from typing_extensions import deprecated
 
 
 class TrialResult(BaseModel):

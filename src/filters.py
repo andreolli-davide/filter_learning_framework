@@ -20,7 +20,6 @@ Each filter exposes its parameters, with descriptions of their effects and how
 changing their values influences the filter's behavior.
 """
 
-import typing
 from abc import ABC, ABCMeta, abstractmethod
 from enum import IntEnum, auto
 from typing import (

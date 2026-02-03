@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import List, Literal, Self
-from warnings import deprecated
+from typing_extensions import deprecated
 
 from pydantic import BaseModel, Field
 from ultralytics.models import YOLO
