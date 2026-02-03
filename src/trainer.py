@@ -14,7 +14,7 @@ Each class and method is documented, and all Pydantic fields include description
 """
 
 from pathlib import Path
-from typing import List, Type
+from typing import Dict, List, Type
 
 import optuna
 from optuna import Trial
@@ -29,14 +29,10 @@ from dataset import (
     TransientSample,
 )
 from filters import (
+    FilterAdapter,
     FilterParametersHint,
     FilterType,
-    IsFilterAdapter,
-    LaplacianSharpenFilterAdapter,
-    MedianBlurFilterAdapter,
     NoOpFilterAdapter,
-    SaturationBoostFilterAdapter,
-    SoftClaheFilterAdapter,
 )
 from yolo import Yolo
 
@@ -48,13 +44,13 @@ class Trainer:
     """
 
     model: Yolo
-    filters_path: List[Type[IsFilterAdapter]]
+    filters_path: List[Type[FilterAdapter]]
     samples: List[StoredSample]
 
     def __init__(
         self,
         model: Yolo,
-        filters_path: List[Type[IsFilterAdapter]],
+        filters_path: List[Type[FilterAdapter]],
         samples: List[StoredSample],
     ) -> None:
         """
@@ -64,14 +60,16 @@ class Trainer:
             filters_path: List of filter adapter classes in the order to be applied.
             dataset: List of samples to process.
         """
-        # Ensure filters are ordered correctly and no NO_OP filters are in the path
+        # Ensure filters are ordered correctly while allowing skipped layers (NoOp)
+        last_filter_type_value = 0
         for i, filter_class in enumerate(filters_path):
             if filter_class.filter_type == FilterType.NO_OP:
                 continue
-            elif filter_class.filter_type != i + 1:
+            if filter_class.filter_type <= last_filter_type_value:
                 raise ValueError(
                     f"Violation of ordering constraint at layer {i}: found '{filter_class.filter_type.name}'."
                 )
+            last_filter_type_value = filter_class.filter_type
 
         # Ensure not all filters are NO_OP
         if all([filter == NoOpFilterAdapter for filter in filters_path]):
@@ -91,11 +89,12 @@ class Trainer:
         Returns:
             YOLO accuracy (float).
         """
-        parameters: List[BaseModel] = []
+        filter_parameters: List[BaseModel] = []
+        filter_parameters_serializable: Dict[str, Dict] = {}
 
         # Suggest hyperparameters for each filter in the path
-        for filter_class in self.filters_path:
-            filter_parameters_class = filter_class.parameters_class
+        for idx, filter_class in enumerate(self.filters_path):
+            filter_parameters_class = filter_class.parameters_class  # type: ignore[attr-defined]
             filter_suggested_parameters = {}
 
             # Iterate over each hyperparameter field in the filter's parameter class
@@ -109,35 +108,46 @@ class Trainer:
                         # Suggest integer hyperparameters
                         if field_type is int:
                             filter_suggested_parameters[field_name] = trial.suggest_int(
-                                name=f"{filter_class.filter_type.name}_{field_name}",
+                                name=f"{filter_class.name}_{field_name}",
                                 low=field_hint.lower_bound,
                                 high=field_hint.upper_bound,
-                                step=field_hint.step
-                                if field_hint.step is not None
-                                else 1,
+                                step=(
+                                    field_hint.step
+                                    if field_hint.step is not None
+                                    else 1
+                                ),
                             )
                         # Suggest float hyperparameters
                         if field_type is float:
                             filter_suggested_parameters[field_name] = (
                                 trial.suggest_float(
-                                    name=f"{filter_class.filter_type.name}_{field_name}",
+                                    name=f"{filter_class.name}_{field_name}",
                                     low=field_hint.lower_bound,
                                     high=field_hint.upper_bound,
                                     step=field_hint.step,
                                 )
                             )
 
-            # Store the suggested parameters for this filter
-            parameters.append(
-                filter_class.parameters_class(**filter_suggested_parameters)
+            # Store the suggested parameters for this filter (preserve order)
+            params = filter_class.parameters_class(  # type: ignore[attr-defined]
+                **filter_suggested_parameters
             )
+            filter_parameters.append(params)
+            filter_parameters_serializable[f"{filter_class.name}_{idx}"] = (
+                params.model_dump()
+            )
+
+        # Store filter parameters in trial user attributes for logging
+        trial.set_user_attr("filter_parameters", filter_parameters_serializable)
 
         # Apply the filter pipeline to each image in the dataset
         transformed_samples: List[TransientSample] = []
         for sample in tqdm(self.samples, desc="Applying filters", unit="img"):
             image = sample.load_image()
             for layer_index, filter_class in enumerate(self.filters_path):
-                parametrized_filter = filter_class.parametrized(parameters[layer_index])
+                parametrized_filter = filter_class.parametrized(
+                    filter_parameters[layer_index]
+                )
                 image = parametrized_filter.apply(image)
             transformed_samples.append(
                 TransientSample(numpy_image=image, labels=sample.labels)
@@ -150,9 +160,18 @@ class Trainer:
 
 
 if __name__ == "__main__":
+    from filters import (
+        ClaheFilterAdapter,
+        FilterParametersHint,
+        LaplacianSharpenFilterAdapter,
+        MedianBlurFilterAdapter,
+        NoOpFilterAdapter,
+        SaturationBoostFilterAdapter,
+    )
+
     # Create or load an Optuna study for YOLO preprocessing optimization
     study = optuna.create_study(
-        study_name="yolo_preprocessing_optimization_2",
+        study_name="yolo_preprocessing_optimization_3",
         storage="sqlite:///yolo_preprocessing_optimization.db",
         load_if_exists=True,
         direction="maximize",
@@ -160,7 +179,7 @@ if __name__ == "__main__":
 
     dataset = Dataset.load_from_directory(Path("resources/dataset"))
     samples = dataset.pick_random_samples(
-        10, magnitude=Magnitude.LCM, split=DatasetSplit.VAL
+        magnitude=Magnitude.LCM, split=DatasetSplit.VAL
     )
     model = Yolo.load_model(Path("resources/model.pt"))
 
@@ -170,7 +189,7 @@ if __name__ == "__main__":
         filters_path=[
             MedianBlurFilterAdapter,
             SaturationBoostFilterAdapter,
-            SoftClaheFilterAdapter,
+            ClaheFilterAdapter,
             LaplacianSharpenFilterAdapter,
         ],
         samples=samples,

@@ -20,19 +20,19 @@ Each filter exposes its parameters, with descriptions of their effects and how
 changing their values influences the filter's behavior.
 """
 
+import typing
 from abc import ABC, ABCMeta, abstractmethod
 from enum import IntEnum, auto
 from typing import (
     Annotated,
     Generic,
     Optional,
-    Protocol,
     Type,
     TypeVar,
 )
 
 import numpy as np
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 FilterParameters = TypeVar("FilterParameters", bound=BaseModel)
 
@@ -111,23 +111,6 @@ class FilterAdapterMeta(ABCMeta):
         return super().__new__(mcls, name, bases, dct)
 
 
-class IsFilterAdapter(Protocol[FilterParameters]):
-    """
-    Protocol for classes that have filter attributes.
-    """
-
-    name: str
-    filter_type: FilterType
-    initial_parameters: FilterParameters
-    parameters_class: Type
-
-    @staticmethod
-    def apply_filter(image: np.ndarray, parameters: FilterParameters) -> np.ndarray: ...
-
-    @classmethod
-    def parametrized(cls, parameters: FilterParameters) -> "ParametrizedFilter": ...
-
-
 class FilterAdapter(ABC, Generic[FilterParameters], metaclass=FilterAdapterMeta):
     """
     Abstract Base Class for image filter adapters.
@@ -170,6 +153,18 @@ class FilterAdapter(ABC, Generic[FilterParameters], metaclass=FilterAdapterMeta)
         """
         return ParametrizedFilter(adapter=cls, parameters=parameters)
 
+    @staticmethod
+    def from_name(filter_name: str) -> Type["FilterAdapter"]:
+        for subclass in FilterAdapter.__subclasses__():
+            if subclass.name == filter_name:
+                return subclass
+
+        raise ValueError(f"Filter with name '{filter_name}' not found.")
+
+    @staticmethod
+    def get_all_filters() -> list[Type["FilterAdapter"]]:
+        return FilterAdapter.__subclasses__()
+
 
 FilterParametersT = TypeVar("FilterParametersT", bound=BaseModel)
 
@@ -177,6 +172,8 @@ FilterParametersT = TypeVar("FilterParametersT", bound=BaseModel)
 class ParametrizedFilter(BaseModel, Generic[FilterParametersT]):
     adapter: Type[FilterAdapter]
     parameters: FilterParametersT
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def apply(self, image: np.ndarray) -> np.ndarray:
         return self.adapter.apply_filter(image, self.parameters)
@@ -409,66 +406,21 @@ class ClaheParameters(BaseModel):
     ]
 
 
-class SoftClaheFilterAdapter(FilterAdapter[ClaheParameters]):
+class ClaheFilterAdapter(FilterAdapter[ClaheParameters]):
     """
-    CLAHE Filter Adapter (Soft).
+    CLAHE Filter Adapter.
 
-    Applies Contrast Limited Adaptive Histogram Equalization (CLAHE) to enhance local contrast.
-    Useful for improving the visibility of features in both grayscale and color images.
-
-    Parameters:
-        clipLimit: Lower value (e.g., 2.0) for moderate contrast enhancement.
-        tileGridSize: Grid size for local histogram equalization.
-    """
-
-    name = "CLAHE (with starting 'clip limit' set to 2.0)"
-    filter_type = FilterType.CONTRAST_ENHANCEMENT
-    parameters_class = ClaheParameters
-    initial_parameters = ClaheParameters(clip_limit=2.0, tile_grid_size=8)
-
-    @staticmethod
-    def apply_filter(image: np.ndarray, parameters: ClaheParameters) -> np.ndarray:
-        """
-        Apply CLAHE to the image.
-
-        Args:
-            image: Input image.
-            parameters: ClaheParameters.
-
-        Returns:
-            Contrast-enhanced image.
-        """
-        import cv2
-
-        image = image.astype(np.uint8)
-        clahe = cv2.createCLAHE(
-            clipLimit=parameters.clip_limit,
-            tileGridSize=(parameters.tile_grid_size, parameters.tile_grid_size),
-        )
-        if len(image.shape) == 2:  # Grayscale image
-            return clahe.apply(image)
-        elif len(image.shape) == 3:  # Color image
-            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-            luminosity, a, b = cv2.split(lab)
-            l_eq = clahe.apply(luminosity)
-            lab_eq = cv2.merge((l_eq, a, b))
-            return cv2.cvtColor(lab_eq, cv2.COLOR_LAB2BGR)
-        else:
-            raise ValueError("Unsupported image shape for CLAHE filter.")
-
-
-class HardClaheFilterAdapter(FilterAdapter[ClaheParameters]):
-    """
-    CLAHE Filter Adapter (Hard).
-
-    Like Soft CLAHE, but with a higher clip limit for stronger contrast enhancement.
+    Applies Contrast Limited Adaptive Histogram Equalization (CLAHE) to enhance local contrast in images.
+    This filter is effective for improving the visibility of features in both grayscale and color images,
+    especially in regions with varying illumination. The clip limit controls the degree of contrast
+    enhancement, while the tile grid size determines the granularity of local equalization.
 
     Parameters:
         clipLimit: Higher value (e.g., 4.0) for stronger contrast enhancement.
         tileGridSize: Grid size for local histogram equalization.
     """
 
-    name = "CLAHE (with starting 'clip limit' set to 4.0)"
+    name = "CLAHE"
     filter_type = FilterType.CONTRAST_ENHANCEMENT
     parameters_class = ClaheParameters
     initial_parameters = ClaheParameters(clip_limit=4.0, tile_grid_size=8)

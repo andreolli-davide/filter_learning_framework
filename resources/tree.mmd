@@ -29,8 +29,7 @@ graph TD
     subgraph Layer3 [Step 3: Contrast Enhancement]
         direction LR
         C0("No Contrast"):::contrast
-        C1("CLAHE Soft<br/>(Clip=2.0, Tile=8x8)"):::contrast
-        C2("CLAHE Hard<br/>(Clip=4.0, Tile=8x8)"):::contrast
+        C2("CLAHE<br/>(Clip=4.0, Tile=8x8)"):::contrast
         C3("Gamma Correction<br/>(γ=1.2)"):::contrast
     end
 

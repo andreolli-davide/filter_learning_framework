@@ -8,12 +8,11 @@ from ultralytics.models import YOLO
 from dataset import (
     Dataset,
     DatasetSplit,
-    MalariaStage,
     Magnitude,
+    MalariaStage,
     StagingDataset,
     TransientSample,
 )
-from filters import SoftClaheFilterAdapter
 
 
 class YoloConfig(BaseModel):
@@ -118,24 +117,43 @@ class Yolo:
 
 
 if __name__ == "__main__":
+    from filters import (
+        ClaheParameters,
+        MedianBlurFilterAdapter,
+        MedianBlurParameters,
+        ParametrizedFilter,
+        SaturationBoostFilterAdapter,
+        SaturationBoostParameters,
+        ClaheFilterAdapter,
+    )
+
     dataset = Dataset.load_from_directory(Path("resources/dataset"))
     model = Yolo.load_model(Path("resources/model.pt"))
 
     samples = dataset.pick_random_samples(
         magnitude=Magnitude.LCM, split=DatasetSplit.VAL
     )
+
+    best_parameters: List[ParametrizedFilter] = [
+        MedianBlurFilterAdapter.parametrized(MedianBlurParameters(kernel_size=5)),
+        SaturationBoostFilterAdapter.parametrized(
+            SaturationBoostParameters(boost_factor=1.6)
+        ),
+        ClaheFilterAdapter.parametrized(
+            ClaheParameters(
+                clip_limit=2.0,
+                tile_grid_size=12,
+            )
+        ),
+    ]
+
     transformed_samples: List[TransientSample] = []
     for sample in samples:
-        transformed_sample = sample.apply_transform(
-            [
-                SoftClaheFilterAdapter.parametrized(
-                    SoftClaheFilterAdapter.initial_parameters
-                )
-            ]
-        )
+        transformed_sample = sample.apply_transform(best_parameters)
         transformed_samples.append(transformed_sample)
 
     transient_dataset = Dataset.create_transient_dataset(transformed_samples)
 
     temporary_dataset = transient_dataset.to_staging_dataset()
     result = model.evaluate(temporary_dataset)
+    print(result)
