@@ -21,20 +21,20 @@ from optuna import Trial
 from pydantic import BaseModel
 from tqdm import tqdm
 
-from dataset import (
+from .dataset import (
     Dataset,
     DatasetSplit,
     Magnitude,
     StoredSample,
     TransientSample,
 )
-from filters import (
+from .filters import (
     FilterAdapter,
     FilterParametersHint,
     FilterType,
     NoOpFilterAdapter,
 )
-from yolo import Yolo
+from .yolo import Yolo
 
 
 class Trainer:

@@ -39,8 +39,8 @@ from typing import (
 import optuna
 from pydantic import BaseModel, Field, PlainSerializer
 
-from dataset import Dataset, DatasetSplit, Magnitude, StoredDataset
-from filters import (
+from .dataset import Dataset, DatasetSplit, Magnitude, StoredDataset
+from .filters import (
     BilateralFilterAdapter,
     ClaheFilterAdapter,
     FilterAdapter,
@@ -52,10 +52,8 @@ from filters import (
     SaturationBoostFilterAdapter,
     UnsharpMaskFilterAdapter,
 )
-from trainer import Trainer
-from yolo import Yolo
-
-from typing_extensions import deprecated
+from .trainer import Trainer
+from .yolo import Yolo
 
 
 class TrialResult(BaseModel):
