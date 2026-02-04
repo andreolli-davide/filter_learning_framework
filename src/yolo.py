@@ -110,6 +110,8 @@ class Yolo:
             plots=False,
             verbose=False,
             device=self.device,
+            conf=0.25,
+            iou=0.45,
         )
 
         return results.box.map50

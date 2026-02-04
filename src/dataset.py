@@ -326,34 +326,6 @@ class Dataset(ABC, Generic[SampleT]):
         self.samples: List[SampleT] = []
 
     @staticmethod
-    def load_from_kaggle(destination_path: Optional[Path] = None) -> "StoredDataset":
-        """
-        Downloads and loads the dataset from Kaggle.
-
-        Args:
-            destination_path (Optional[Path]): Where to download the dataset.
-
-        Returns:
-            StoredDataset: The loaded dataset from Kaggle.
-        """
-        import kagglehub
-
-        download_path = kagglehub.dataset_download(
-            "davidesenette/malaria-hcm-lcm-1000",
-        )
-
-        if destination_path is not None:
-            destination_path.mkdir(parents=True, exist_ok=True)
-
-            unpack_archive(download_path, extract_dir=destination_path)
-            download_path = destination_path
-
-        instance = object.__new__(StoredDataset)
-        instance.base_path = Path(download_path)
-        instance._load_samples()
-        return instance
-
-    @staticmethod
     def load_from_directory(path: Path) -> "StoredDataset":
         """
         Loads the dataset from a local directory.
