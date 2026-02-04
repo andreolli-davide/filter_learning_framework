@@ -5,13 +5,12 @@ from typing_extensions import deprecated
 from pydantic import BaseModel, Field
 from ultralytics.models import YOLO
 
-from .dataset import (
+from dataset import (
     Dataset,
     DatasetSplit,
     Magnitude,
     MalariaStage,
     StagingDataset,
-    TransientSample,
 )
 
 
@@ -117,43 +116,50 @@ class Yolo:
 
 
 if __name__ == "__main__":
-    from filters import (
-        ClaheParameters,
-        MedianBlurFilterAdapter,
-        MedianBlurParameters,
-        ParametrizedFilter,
-        SaturationBoostFilterAdapter,
-        SaturationBoostParameters,
-        ClaheFilterAdapter,
-    )
+    import filters
+    import dataset
 
-    dataset = Dataset.load_from_directory(Path("resources/dataset"))
+    stored_dataset = Dataset.load_from_directory(Path("resources/dataset"))
     model = Yolo.load_model(Path("resources/model.pt"))
 
-    samples = dataset.pick_random_samples(
-        magnitude=Magnitude.LCM, split=DatasetSplit.VAL
+    samples = stored_dataset.pick_random_samples(
+        magnitude=Magnitude.LCM, split=DatasetSplit.TEST
     )
 
-    best_parameters: List[ParametrizedFilter] = [
-        MedianBlurFilterAdapter.parametrized(MedianBlurParameters(kernel_size=5)),
-        SaturationBoostFilterAdapter.parametrized(
-            SaturationBoostParameters(boost_factor=1.6)
+    best_parameters: List[filters.ParametrizedFilter] = [
+        filters.BilateralFilterAdapter.parametrized(
+            filters.BilateralFilterParameters(
+                diameter=8,
+                sigmaColor=65,
+                sigmaSpace=45,
+            ),
         ),
-        ClaheFilterAdapter.parametrized(
-            ClaheParameters(
+        filters.SaturationBoostFilterAdapter.parametrized(
+            filters.SaturationBoostParameters(boost_factor=1.8)
+        ),
+        filters.ClaheFilterAdapter.parametrized(
+            filters.ClaheParameters(
                 clip_limit=2.0,
-                tile_grid_size=12,
+                tile_grid_size=16,
+            )
+        ),
+        filters.UnsharpMaskFilterAdapter.parametrized(
+            filters.UnsharpMaskParameters(
+                sigma=1.6,
+                strength=1.75,
             )
         ),
     ]
 
-    transformed_samples: List[TransientSample] = []
+    transformed_samples: List[dataset.TransientSample] = []
     for sample in samples:
         transformed_sample = sample.apply_transform(best_parameters)
         transformed_samples.append(transformed_sample)
 
-    transient_dataset = Dataset.create_transient_dataset(transformed_samples)
+    transient_dataset = Dataset.create_transient_dataset(
+        samples=transformed_samples,
+    )
 
-    temporary_dataset = transient_dataset.to_staging_dataset()
-    result = model.evaluate(temporary_dataset)
+    transient_dataset = transient_dataset.to_staging_dataset()
+    result = model.evaluate(transient_dataset)
     print(result)

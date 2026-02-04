@@ -77,14 +77,14 @@ class Label(BaseModel):
     malaria_stage: MalariaStage = Field(
         ..., description="Malaria stage associated with the label."
     )
-    x_center: float = Field(
+    top_left: float = Field(
         ..., description="Normalized x-coordinate of bounding box center."
     )
-    y_center: float = Field(
+    top_right: float = Field(
         ..., description="Normalized y-coordinate of bounding box center."
     )
-    width: float = Field(..., description="Normalized width of bounding box.")
-    height: float = Field(..., description="Normalized height of bounding box.")
+    bottom_left: float = Field(..., description="Normalized width of bounding box.")
+    bottom_right: float = Field(..., description="Normalized height of bounding box.")
 
     @classmethod
     def from_string_line(cls, line: str) -> Self:
@@ -109,10 +109,10 @@ class Label(BaseModel):
 
         return cls(
             malaria_stage=MalariaStage(int(format_parts[0])),
-            x_center=float(format_parts[1]),
-            y_center=float(format_parts[2]),
-            width=float(format_parts[3]),
-            height=float(format_parts[4]),
+            top_left=float(format_parts[1]),
+            top_right=float(format_parts[2]),
+            bottom_left=float(format_parts[3]),
+            bottom_right=float(format_parts[4]),
         )
 
     def to_string_line(self) -> str:
@@ -122,7 +122,7 @@ class Label(BaseModel):
         Returns:
             str: YOLO formatted string for the label.
         """
-        return f"{self.malaria_stage.value} {self.x_center} {self.y_center} {self.width} {self.height}"
+        return f"{self.malaria_stage.value} {self.top_left} {self.top_right} {self.bottom_left} {self.bottom_right}"
 
 
 class Magnitude(StrEnum):
@@ -340,8 +340,13 @@ class Dataset(ABC, Generic[SampleT]):
 
         download_path = kagglehub.dataset_download(
             "davidesenette/malaria-hcm-lcm-1000",
-            path=str(destination_path) if destination_path else None,
         )
+
+        if destination_path is not None:
+            destination_path.mkdir(parents=True, exist_ok=True)
+
+            unpack_archive(download_path, extract_dir=destination_path)
+            download_path = destination_path
 
         instance = object.__new__(StoredDataset)
         instance.base_path = Path(download_path)
