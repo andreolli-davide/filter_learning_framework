@@ -10,4 +10,4 @@ wheels/
 .venv
 
 resources/dataset/
-resources/model.pt
+resources/*.pt
