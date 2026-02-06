@@ -43,7 +43,6 @@ siv/
 │   ├── filters.py        # Image filter implementations
 │   ├── trainer.py        # Optuna training integration
 │   └── yolo.py           # YOLO model wrapper
-├── utils.py              # Utility functions
 ├── resources/
 │   ├── model.pt          # Pre-trained YOLO model
 │   ├── model_da.pt       # Domain-adapted YOLO model
@@ -345,39 +344,6 @@ log = Orchestrator.train(
 # Access results
 print(f"Best mAP@50: {log.best_map_50}")
 print(f"Best filters: {[f.adapter.name for f in log.best_filters_combination]}")
-```
-
----
-
-### 6. Utils Module (`utils.py`)
-
-Utility functions for coordinate conversion and experiment execution.
-
-#### Functions
-
-```python
-def yolo_to_xyxy(label, img_w, img_h) -> Tuple[int, List[float]]:
-    """
-    Convert YOLO format (x_center, y_center, w, h) to corner coordinates.
-
-    Returns:
-        Tuple of (class_id, [x1, y1, x2, y2])
-    """
-
-def execute_experiment(dataset: list, model) -> float:
-    """
-    Execute a validation experiment with a dataset.
-
-    Args:
-        dataset: List of sample dicts with 'image', 'image_name', 'labels'
-        model: YOLO model instance
-
-    Returns:
-        mAP@50 score
-    """
-
-def create_yaml_config(tmp_dir: str) -> str:
-    """Create a YOLO config YAML file in the given directory."""
 ```
 
 ---
